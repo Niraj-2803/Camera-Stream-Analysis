@@ -1,0 +1,61 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+*.p~ 
+*.swp
+
+# Django
+*.log
+*.pot
+*.pyc
+db.sqlite3
+db.sqlite3-journal
+
+# Media and Static (optional depending on setup)
+media/
+staticfiles/
+static/
+
+# Virtualenv
+venv/
+.env
+.env.*
+
+# VS Code
+.vscode/
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+
+# Test and coverage
+htmlcov/
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.log
+
+# Pytest
+.pytest_cache/
+
+# JetBrains
+.idea/
+
+# Git
+*.orig
+
+# Ignore all migration files except __init__.py
+**/migrations/*.py
+!**/migrations/__init__.py
