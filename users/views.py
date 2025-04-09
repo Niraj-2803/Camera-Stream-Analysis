@@ -2,11 +2,13 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, permissions
 from rest_framework_simplejwt.tokens import RefreshToken
+from drf_yasg.utils import swagger_auto_schema
+from drf_yasg import openapi
 
 from .serializers import RegisterSerializer, LoginSerializer
 from .models import User
 
-# Helper for token generation
+# Token generation helper
 def get_tokens_for_user(user):
     refresh = RefreshToken.for_user(user)
     return {
@@ -15,15 +17,16 @@ def get_tokens_for_user(user):
     }
 
 class RegisterView(APIView):
+    @swagger_auto_schema(request_body=RegisterSerializer, responses={201: "User created"})
     def post(self, request):
         serializer = RegisterSerializer(data=request.data)
         if serializer.is_valid():
             user = serializer.save()
-            # tokens = get_tokens_for_user(user)
             return Response({'user': serializer.data}, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 class LoginView(APIView):
+    @swagger_auto_schema(request_body=LoginSerializer, responses={200: "Tokens"})
     def post(self, request):
         serializer = LoginSerializer(data=request.data)
         if serializer.is_valid():
@@ -35,6 +38,16 @@ class LoginView(APIView):
 class LogoutView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
+    @swagger_auto_schema(
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={
+                'refresh': openapi.Schema(type=openapi.TYPE_STRING, description='Refresh token')
+            },
+            required=['refresh']
+        ),
+        responses={205: "Logged out", 400: "Invalid token"}
+    )
     def post(self, request):
         try:
             refresh_token = request.data["refresh"]
