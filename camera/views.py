@@ -6,6 +6,7 @@ from .serializers import CameraSerializer, UserAiModelSerializer, UserAiModelAct
 from django.http import StreamingHttpResponse, HttpResponse
 from django.shortcuts import get_object_or_404
 import cv2
+from .aimodels.face_blur import blur_faces_from_stream
 
 
 class CameraListCreateView(APIView):
@@ -69,9 +70,15 @@ class AiModelListView(APIView):
     permission_classes = [permissions.IsAuthenticated]  
 
     def get(self, request):
-        models = AiModel.objects.all()
-        serializer = AiModelSerializer(models, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        stream_url = "rtsp://admin:admin@192.168.1.4:1935"
+        blur_faces_from_stream(stream_url)
+
+        return Response({"message": "Video played locally with face blur."}, status=status.HTTP_200_OK)
+        # Response({"message": "Stream processed (or attempted to)"}, status=status.HTTP_200_OK)
+
+        # models = AiModel.objects.all()
+        # serializer = AiModelSerializer(models, many=True)
+        # return Response(serializer.data, status=status.HTTP_200_OK)
     
 
 class ActivateAiModelView(APIView):
