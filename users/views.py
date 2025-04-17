@@ -4,9 +4,7 @@ from rest_framework import status, permissions
 from rest_framework_simplejwt.tokens import RefreshToken
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
-
 from .serializers import RegisterSerializer, LoginSerializer
-from .models import User
 
 # Token generation helper
 def get_tokens_for_user(user):
