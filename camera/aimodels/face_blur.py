@@ -1,43 +1,4 @@
 import cv2
-import numpy as np
-from ultralytics import solutions  # assuming you're using Ultralytics' ObjectBlurrer
-
-
-# def blur_faces_from_stream(stream_url, model_path="yolo11n.pt"):
-#     print("cameee")
-#     blurrer = solutions.ObjectBlurrer(
-#         show=True,
-#         model=model_path,
-#         blur_ratio=0.5,
-#         classes=[0]  # class 0 = person
-#     )
-
-#     print(f"Connecting to stream: {stream_url}")
-#     cap = cv2.VideoCapture(stream_url)
-
-#     if not cap.isOpened():
-#         print("Failed to open video stream.")
-#         return
-
-#     print("Processing stream... Press ESC to stop.")
-#     while cap.isOpened():
-#         ret, frame = cap.read()
-#         if not ret:
-#             print("No frame received from stream.")
-#             break
-
-#         results = blurrer(frame)
-
-#         cv2.imshow("Blurred Stream", results.plot_im)
-
-#         if cv2.waitKey(1) == 27:  # ESC to stop
-#             break
-
-#     cap.release()
-#     cv2.destroyAllWindows()
-#     print("Stream processing complete.")
-
-import cv2
 
 def blur_faces_from_stream(rtsp_url):
     cap = cv2.VideoCapture(rtsp_url, cv2.CAP_FFMPEG)
