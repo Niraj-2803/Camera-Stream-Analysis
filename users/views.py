@@ -15,6 +15,7 @@ def get_tokens_for_user(user):
     }
 
 class RegisterView(APIView):
+    permission_classes = [permissions.AllowAny]
     @swagger_auto_schema(request_body=RegisterSerializer, responses={201: "User created"})
     def post(self, request):
         serializer = RegisterSerializer(data=request.data)
@@ -24,6 +25,7 @@ class RegisterView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 class LoginView(APIView):
+    permission_classes = [permissions.AllowAny]
     @swagger_auto_schema(request_body=LoginSerializer, responses={200: "Tokens"})
     def post(self, request):
         serializer = LoginSerializer(data=request.data)

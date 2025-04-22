@@ -2,25 +2,28 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, permissions
 from .models import Camera, UserAiModel, AiModel
-from .serializers import CameraSerializer, UserAiModelSerializer, UserAiModelActionSerializer, AiModelSerializer
+from .serializers import CameraSerializer, UserAiModelSerializer, UserAiModelActionSerializer
 from django.http import StreamingHttpResponse, HttpResponse
 from django.shortcuts import get_object_or_404
 import cv2
 from .aimodels.face_blur import blur_faces_from_stream
+from drf_yasg.utils import swagger_auto_schema
 
 
 class CameraListCreateView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
+    @swagger_auto_schema(responses={200: CameraSerializer(many=True)})
     def get(self, request):
         cameras = Camera.objects.filter(is_deleted=False)
         serializer = CameraSerializer(cameras, many=True)
         return Response(serializer.data)
 
+    @swagger_auto_schema(request_body=CameraSerializer, responses={201: CameraSerializer})
     def post(self, request):
         serializer = CameraSerializer(data=request.data)
         if serializer.is_valid():
-            serializer.save(created_by=request.user)  # 👈 Auto-set the user
+            serializer.save(created_by=request.user)  
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -51,6 +54,9 @@ class CameraStreamFeedView(APIView):
 
 class CameraStreamViewer(APIView):
     permission_classes = [permissions.IsAuthenticated]
+    # @swagger_auto_schema(manual_parameters=[
+    #     openapi.Parameter('pk', openapi.IN_PATH, description="Camera ID", type=openapi.TYPE_INTEGER)
+    # ])
 
     def get(self, request, pk):
         return HttpResponse(
@@ -68,7 +74,7 @@ class CameraStreamViewer(APIView):
 
 class AiModelListView(APIView):
     permission_classes = [permissions.IsAuthenticated]  
-
+    @swagger_auto_schema(responses={200: "Video played locally with face blur."})
     def get(self, request):
         stream_url = "rtsp://admin:admin@192.168.1.4:1935"
         blur_faces_from_stream(stream_url)
@@ -83,7 +89,7 @@ class AiModelListView(APIView):
 
 class ActivateAiModelView(APIView):
     permission_classes = [permissions.IsAuthenticated]
-
+    @swagger_auto_schema(request_body=UserAiModelActionSerializer, responses={200: UserAiModelSerializer})
     def post(self, request):
         serializer = UserAiModelActionSerializer(data=request.data)
         if not serializer.is_valid():
