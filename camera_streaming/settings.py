@@ -45,6 +45,7 @@ INSTALLED_APPS = [
     'rest_framework_simplejwt.token_blacklist',
     'drf_yasg',  
     'channels',
+    'corsheaders',
 
     # Local apps
     'camera',
@@ -53,6 +54,7 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware',  # 🔥 add this FIRST
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -63,6 +65,9 @@ MIDDLEWARE = [
 ]
 
 ROOT_URLCONF = 'camera_streaming.urls'
+
+CORS_ALLOW_ALL_ORIGINS = True  # 🚀 Allow all (only safe for local/dev)
+
 
 AUTH_USER_MODEL = 'users.User'
 
@@ -104,8 +109,8 @@ DATABASES = {
 #         'NAME': 'camex',
 #         'USER': 'postgres',
 #         'PASSWORD': 'rajesh123',
-#         'HOST': 'localhost',  # or your RDS / EC2 IP / domain
-#         'PORT': '5432',       # default PostgreSQL port
+#         'HOST': 'localhost',  
+#         'PORT': '5432',       
 #     }
 # }
 
