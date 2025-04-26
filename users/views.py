@@ -6,6 +6,7 @@ from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
 from .serializers import RegisterSerializer, LoginSerializer
 
+
 # Token generation helper
 def get_tokens_for_user(user):
     refresh = RefreshToken.for_user(user)
@@ -56,3 +57,18 @@ class LogoutView(APIView):
             return Response(status=status.HTTP_205_RESET_CONTENT)
         except Exception:
             return Response(status=status.HTTP_400_BAD_REQUEST)
+
+
+class TestAPIView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    @swagger_auto_schema(
+        operation_summary="Test API",
+        operation_description="This API is used to check if the server is working fine. It returns a simple success message.",
+        responses={200: 'API working successfully'}
+    )
+    def get(self, request):
+        """
+        Simple API to test if the server is up.
+        """
+        return Response({"message": "API working"})

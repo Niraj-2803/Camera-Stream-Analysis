@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Camera Dashboard</title>
+  <style>
+    .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; }
+    .tile { border: 1px solid #ccc; padding: 10px; }
+    img { width: 100%; height: 200px; object-fit: cover; }
+    button { margin-top: 8px; width: 48%; }
+  </style>
+</head>
+<body>
+  <h2>Live Camera Dashboard</h2>
+  <div class="grid">
+    {% for camera in cameras %}
+      <div class="tile">
+        <h4>{{ camera.name }}</h4>
+        <img id="cameraFeed{{ camera.id }}" src="/static/no-video.jpg" />
+        <div>
+          <button onclick="startStream({{ camera.id }})">Start</button>
+          <button onclick="stopStream({{ camera.id }})">Stop</button>
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+
+  <script>
+    const sockets = {};
+
+    function startStream(cameraId) {
+      if (sockets[cameraId]) return;
+      const socket = new WebSocket(`ws://${window.location.host}/ws/stream/${cameraId}/`);
+      sockets[cameraId] = socket;
+
+      socket.onmessage = function(event) {
+        const blob = new Blob([event.data], { type: "image/jpeg" });
+        const url = URL.createObjectURL(blob);
+        document.getElementById("cameraFeed" + cameraId).src = url;
+      };
+
+      socket.onerror = function() {
+        console.error("WebSocket error for camera", cameraId);
+      };
+
+      socket.onclose = function() {
+        delete sockets[cameraId];
+        document.getElementById("cameraFeed" + cameraId).src = "/static/no-video.jpg";
+      };
+    }
+
+    function stopStream(cameraId) {
+      const socket = sockets[cameraId];
+      if (socket) {
+        socket.close();
+      }
+    }
+  </script>
+</body>
+</html>

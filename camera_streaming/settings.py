@@ -44,6 +44,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'rest_framework_simplejwt.token_blacklist',
     'drf_yasg',  
+    'channels',
 
     # Local apps
     'camera',
@@ -65,11 +66,12 @@ ROOT_URLCONF = 'camera_streaming.urls'
 
 AUTH_USER_MODEL = 'users.User'
 
+ASGI_APPLICATION = "camera_streaming.asgi.application"  # or your project name
 
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        'DIRS': [BASE_DIR / 'templates'],
         'APP_DIRS': True,  
         'OPTIONS': {
             'context_processors': [
@@ -83,7 +85,7 @@ TEMPLATES = [
 ]
 
 
-WSGI_APPLICATION = 'camera_streaming.wsgi.application'
+# WSGI_APPLICATION = 'camera_streaming.wsgi.application'
 
 
 # Database
@@ -96,6 +98,16 @@ DATABASES = {
     }
 }
 
+# DATABASES = {
+#     'default': {
+#         'ENGINE': 'django.db.backends.postgresql',
+#         'NAME': 'camex',
+#         'USER': 'postgres',
+#         'PASSWORD': 'rajesh123',
+#         'HOST': 'localhost',  # or your RDS / EC2 IP / domain
+#         'PORT': '5432',       # default PostgreSQL port
+#     }
+# }
 
 # Password validation
 # https://docs.djangoproject.com/en/5.1/ref/settings/#auth-password-validators
@@ -131,8 +143,13 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/5.1/howto/static-files/
 
-STATIC_URL = 'static/'
-STATIC_ROOT = os.path.join(BASE_DIR, 'static/')
+STATIC_URL = '/static/'
+
+# For development use
+STATICFILES_DIRS = [os.path.join(BASE_DIR, 'static')]  # if you store static files inside a `static/` folder
+
+# Required for collectstatic or certain middleware (like WhiteNoise)
+STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.1/ref/settings/#default-auto-field

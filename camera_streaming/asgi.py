@@ -1,16 +1,35 @@
-"""
-ASGI config for camera_streaming project.
-
-It exposes the ASGI callable as a module-level variable named ``application``.
-
-For more information on this file, see
-https://docs.djangoproject.com/en/5.1/howto/deployment/asgi/
-"""
-
 import os
+import django
 
-from django.core.asgi import get_asgi_application
-
+# 1. Django settings
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'camera_streaming.settings')
+django.setup()
 
-application = get_asgi_application()
+# 2. Django & Channels imports
+from django.core.asgi import get_asgi_application
+from channels.routing import ProtocolTypeRouter, URLRouter
+from channels.auth import AuthMiddlewareStack
+import camera.routing
+
+# 3. Starlette static files
+from starlette.staticfiles import StaticFiles
+from starlette.applications import Starlette
+
+# 4. Static path
+static_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'static')
+
+# 5. Django ASGI app
+django_asgi_app = get_asgi_application()
+
+# 6. Wrap with Starlette for static + Django app
+wrapped_app = Starlette()
+wrapped_app.mount("/static", StaticFiles(directory=static_path), name="static")
+wrapped_app.mount("/", django_asgi_app)
+
+# 7. ASGI application
+application = ProtocolTypeRouter({
+    "http": wrapped_app,
+    "websocket": AuthMiddlewareStack(
+        URLRouter(camera.routing.websocket_urlpatterns)
+    ),
+})

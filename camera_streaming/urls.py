@@ -6,6 +6,10 @@ from django.http import JsonResponse
 from rest_framework import permissions
 from drf_yasg.views import get_schema_view
 from drf_yasg import openapi
+from django.conf import settings
+from django.conf.urls.static import static
+
+from users.views import TestAPIView
 
 
 schema_view = get_schema_view(
@@ -36,4 +40,9 @@ urlpatterns = [
 
     # Test route
     path('ping/', test_ping),
+    path('api/test/', TestAPIView.as_view(), name='test-api'),
+
 ]
+
+if settings.DEBUG:
+    urlpatterns += static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)
