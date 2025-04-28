@@ -68,6 +68,20 @@ ROOT_URLCONF = 'camera_streaming.urls'
 
 CORS_ALLOW_ALL_ORIGINS = True  # 🚀 Allow all (only safe for local/dev)
 
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:5173",
+    "http://camexbr.dezzex.com",
+]
+
+# Optional: Allow all methods like POST, GET, PUT etc
+CORS_ALLOW_METHODS = [
+    "DELETE",
+    "GET",
+    "OPTIONS",
+    "PATCH",
+    "POST",
+    "PUT",
+]
 
 AUTH_USER_MODEL = 'users.User'
 
@@ -96,23 +110,23 @@ TEMPLATES = [
 # Database
 # https://docs.djangoproject.com/en/5.1/ref/settings/#databases
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
-    }
-}
-
 # DATABASES = {
 #     'default': {
-#         'ENGINE': 'django.db.backends.postgresql',
-#         'NAME': 'camex',
-#         'USER': 'postgres',
-#         'PASSWORD': 'rajesh123',
-#         'HOST': 'localhost',  
-#         'PORT': '5432',       
+#         'ENGINE': 'django.db.backends.sqlite3',
+#         'NAME': BASE_DIR / 'db.sqlite3',
 #     }
 # }
+
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': 'camex',
+        'USER': 'postgres',
+        'PASSWORD': 'rajesh123',
+        'HOST': 'localhost',  
+        'PORT': '5432',       
+    }
+}
 
 # Password validation
 # https://docs.djangoproject.com/en/5.1/ref/settings/#auth-password-validators
