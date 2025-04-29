@@ -3,11 +3,15 @@ from .models import Camera, UserAiModel, AiModel
 
 
 class CameraSerializer(serializers.ModelSerializer):
-    created_by = serializers.StringRelatedField(read_only=True) 
+    created_by = serializers.StringRelatedField(read_only=True)
 
     class Meta:
         model = Camera
-        fields = ["id", "name", "rtsp_url", "location", "created_at", "created_by"]
+        fields = [
+            "id", "name", "rtsp_url", "location",
+            "username", "password",  
+            "created_at", "created_by"
+        ]
         read_only_fields = ["created_at", "created_by"]
 
 

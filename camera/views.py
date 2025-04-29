@@ -3,28 +3,101 @@ from rest_framework.response import Response
 from rest_framework import status, permissions
 from .models import Camera, CameraGroup, UserAiModel, AiModel
 from .serializers import AiModelSerializer, CameraGroupActionSerializer, CameraSerializer, UserAiModelSerializer, UserAiModelActionSerializer
-from django.http import StreamingHttpResponse, HttpResponse
 from django.shortcuts import get_object_or_404
-import cv2
-from .aimodels.helper import blur_faces, process_video_stream
 from drf_yasg.utils import swagger_auto_schema
 from rest_framework.generics import GenericAPIView
 from rest_framework.mixins import ListModelMixin
 from rest_framework.pagination import PageNumberPagination
-import requests
-from django.shortcuts import render
+from collections import defaultdict
+from django.conf import settings
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated
+from .models import Camera
+
+class LiveWallAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        mode = request.GET.get('mode', 'normal')
+
+        cameras = Camera.objects.filter(created_by=user, is_active=True).select_related('group')
+        base_url = settings.WS_BASE_URL.rstrip("/")
+
+        all_cameras = []
+        grouped = defaultdict(list)
+
+        for cam in cameras:
+            camera_data = {
+                "id": cam.id,
+                "camera_name": cam.name,
+                "location": cam.location or "",
+                "ws_stream_url": f"{base_url}/ws/stream/{cam.id}/"
+            }
+
+            # Add to full camera list
+            all_cameras.append(camera_data)
+
+            # Group by group name
+            group_name = cam.group.name if cam.group else "Unassigned"
+            grouped[group_name].append(camera_data)
+
+        # Structure the group-wise camera data
+        grouped_data = [
+            {
+                "group_name": group,
+                "cameras": cam_list
+            }
+            for group, cam_list in grouped.items()
+        ]
+
+        return Response({
+            "cameras": all_cameras,
+            "data": grouped_data
+        })
+
+# def generate_frames(rtsp_url, reconnect_delay=5):
+#     print(f"[INFO] Starting stream from: {rtsp_url}")
+    
+#     while True:
+#         cap = cv2.VideoCapture(rtsp_url)
+        
+#         if not cap.isOpened():
+#             print("[WARN] Failed to open stream. Retrying in 5 seconds...")
+#             time.sleep(reconnect_delay)
+#             continue
+        
+#         print("[INFO] Stream opened successfully.")
+        
+#         while True:
+#             success, frame = cap.read()
+
+#             if not success:
+#                 print("[ERROR] Failed to read frame. Attempting to reconnect...")
+#                 cap.release()
+#                 time.sleep(reconnect_delay)
+#                 break  # Exit inner loop to retry connection
+
+#             # Optional: Resize or process frame here if needed
+#             _, buffer = cv2.imencode(".jpg", frame)
+#             frame_bytes = buffer.tobytes()
+
+#             yield (
+#                 b"--frame\r\n"
+#                 b"Content-Type: image/jpeg\r\n\r\n" + frame_bytes + b"\r\n"
+#             )
 
 
+# # @login_required
+# def camera_dashboard(request):
+#     token="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzQ1OTk3MTA0LCJpYXQiOjE3NDU5MTA3MDQsImp0aSI6ImYzYWJmM2UzODk0ZTQ4OGM5ZDg5NmVhYzc1YTRjMGMxIiwidXNlcl9pZCI6MX0.t8tr-X3VrVeDDfP5ntXNTrmd3Szqup_oXPrh5bGUt4w"
+#     headers = {"Authorization": f"Bearer {token}"}
+#     api_url = "http://127.0.0.1:8000/api/camera/"
+#     response = requests.get(api_url, headers=headers)
 
-# @login_required
-def camera_dashboard(request):
-    token="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzQ1NjQ3ODg3LCJpYXQiOjE3NDU1NjE0ODcsImp0aSI6Ijg0MDQxZjU0NzFmYTQ1M2VhOGM5NTI2YmFhNmNiNDUwIiwidXNlcl9pZCI6MX0.QfbEs1A9lSaT09wGDNveacbmBMvvLcTh0z3LjIDO9jo"
-    headers = {"Authorization": f"Bearer {token}"}
-    api_url = "http://127.0.0.1:8000/api/camera/"
-    response = requests.get(api_url, headers=headers)
-
-    cameras = response.json().get("results", [])  # paginated DRF response
-    return render(request, "camera/camera_dashboard.html", {"cameras": cameras})
+#     cameras = response.json().get("results", [])  # paginated DRF response
+#     return render(request, "camera/camera_dashboard.html", {"cameras": cameras})
 
 
 class CameraPagination(PageNumberPagination):
@@ -49,79 +122,6 @@ class CameraListCreateView(GenericAPIView, ListModelMixin):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
-# MJPEG stream generator
-import cv2
-import time
-
-def generate_frames(rtsp_url, reconnect_delay=5):
-    print(f"[INFO] Starting stream from: {rtsp_url}")
-    
-    while True:
-        cap = cv2.VideoCapture(rtsp_url)
-        
-        if not cap.isOpened():
-            print("[WARN] Failed to open stream. Retrying in 5 seconds...")
-            time.sleep(reconnect_delay)
-            continue
-        
-        print("[INFO] Stream opened successfully.")
-        
-        while True:
-            success, frame = cap.read()
-
-            if not success:
-                print("[ERROR] Failed to read frame. Attempting to reconnect...")
-                cap.release()
-                time.sleep(reconnect_delay)
-                break  # Exit inner loop to retry connection
-
-            # Optional: Resize or process frame here if needed
-            _, buffer = cv2.imencode(".jpg", frame)
-            frame_bytes = buffer.tobytes()
-
-            yield (
-                b"--frame\r\n"
-                b"Content-Type: image/jpeg\r\n\r\n" + frame_bytes + b"\r\n"
-            )
-
-
-class CameraStreamFeedView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-
-    def get(self, request, pk):
-        camera = get_object_or_404(Camera, pk=pk, is_deleted=False)
-        return StreamingHttpResponse(
-            generate_frames(camera.rtsp_url),
-            content_type="multipart/x-mixed-replace; boundary=frame",
-        )
-
-
-# class AiModelListView(APIView):
-#     permission_classes = [permissions.IsAuthenticated]  
-#     @swagger_auto_schema(responses={200: "Video played locally with face blur."})
-#     def get(self, request):
-#         stream_url = "rtsp://admin:admin@192.168.1.4:1935"
-#         output_file = r"output_video.mp4"
-#         model_path = "yolo11n.pt"
-#         # blur_faces(stream_url)
-#         result = process_video_stream(
-#         source=stream_url,
-#         output_path=output_file,
-#         model_path=model_path,
-#         usecase="blur_faces"
-#     )
-#         return StreamingHttpResponse(
-#             result,
-#             content_type="multipart/x-mixed-replace; boundary=frame",
-#         )
-
-#         return Response({"message": "Video played locally with face blur."}, status=status.HTTP_200_OK)
-#         # Response({"message": "Stream processed (or attempted to)"}, status=status.HTTP_200_OK)
-
-#         # models = AiModel.objects.all()
-#         # serializer = AiModelSerializer(models, many=True)
-#         # return Response(serializer.data, status=status.HTTP_200_OK)
-    
 
 class ActivateAiModelView(APIView):
     permission_classes = [permissions.IsAuthenticated]

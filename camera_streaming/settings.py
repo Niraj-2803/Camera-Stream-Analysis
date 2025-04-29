@@ -12,24 +12,25 @@ https://docs.djangoproject.com/en/5.1/ref/settings/
 
 import os
 from pathlib import Path
+import environ
 from datetime import timedelta
 
+# --- Setup Environment Variables ---
+BASE_DIR = Path(__file__).resolve().parent.parent
+env = environ.Env(
+    DEBUG=(bool, False)
+)
+environ.Env.read_env(os.path.join(BASE_DIR, '.env'))
+DEBUG = env.bool("DEBUG")
+SECRET_KEY = env("SECRET_KEY")
+ALLOWED_HOSTS = env.list("ALLOWED_HOSTS")
+
+# --- WebSocket Base URL ---
+WS_BASE_URL = env("WS_BASE_URL")
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-
-# Quick-start development settings - unsuitable for production
-# See https://docs.djangoproject.com/en/5.1/howto/deployment/checklist/
-
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-g@1#j=(1zj42r8(q2oi7l@2v$#5qn2^8=ppy4)sz83=6^mit@x'
-
-# SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
-
-ALLOWED_HOSTS = ['3.28.198.167', 'localhost', '127.0.0.1','camexbr.dezzex.com']
-# ALLOWED_HOSTS = ['*']
 
 # Application definition
 
@@ -68,10 +69,8 @@ ROOT_URLCONF = 'camera_streaming.urls'
 
 # CORS_ALLOW_ALL_ORIGINS = True  # 🚀 Allow all (only safe for local/dev)
 
-CORS_ALLOWED_ORIGINS = [
-    "http://localhost:5173",
-    "http://camexbr.dezzex.com",
-]
+CORS_ALLOWED_ORIGINS = env.list("CORS_ALLOWED_ORIGINS")
+
 CORS_ALLOW_CREDENTIALS = True
 
 # Optional: Allow all methods like POST, GET, PUT etc
@@ -111,23 +110,23 @@ TEMPLATES = [
 # Database
 # https://docs.djangoproject.com/en/5.1/ref/settings/#databases
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
-    }
-}
-
 # DATABASES = {
 #     'default': {
-#         'ENGINE': 'django.db.backends.postgresql',
-#         'NAME': 'camex',
-#         'USER': 'postgres',
-#         'PASSWORD': 'rajesh123',
-#         'HOST': 'localhost',  
-#         'PORT': '5432',       
+#         'ENGINE': 'django.db.backends.sqlite3',
+#         'NAME': BASE_DIR / 'db.sqlite3',
 #     }
 # }
+
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': env("DB_NAME"),
+        'USER': env("DB_USER"),
+        'PASSWORD': env("DB_PASSWORD"),
+        'HOST': env("DB_HOST"),
+        'PORT': env("DB_PORT"),
+    }
+}
 
 # Password validation
 # https://docs.djangoproject.com/en/5.1/ref/settings/#auth-password-validators

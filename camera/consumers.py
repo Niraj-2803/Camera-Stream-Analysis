@@ -1,3 +1,4 @@
+# consumers.py
 import cv2
 import threading
 import time
@@ -14,9 +15,24 @@ class CameraStreamConsumer(WebsocketConsumer):
     def disconnect(self, close_code):
         self.streaming = False
 
+    def build_rtsp_url(self, cam):
+        if cam.username and cam.password:
+            # Insert username and password into the RTSP URL
+            parts = cam.rtsp_url.split("://")
+            if len(parts) == 2:
+                protocol, rest = parts
+                return f"{protocol}://{cam.username}:{cam.password}@{rest}"
+        return cam.rtsp_url
+
     def stream_video(self):
-        cam = Camera.objects.get(id=self.camera_id)
-        rtsp_url = cam.rtsp_url
+        try:
+            cam = Camera.objects.get(id=self.camera_id)
+        except Camera.DoesNotExist:
+            self.close()
+            return
+
+        rtsp_url = self.build_rtsp_url(cam)
+
         print(f"[INFO] Connecting to camera stream: {rtsp_url}")
 
         while self.streaming:
@@ -33,14 +49,14 @@ class CameraStreamConsumer(WebsocketConsumer):
             print("[INFO] Stream opened successfully.")
 
             while self.streaming and cap.isOpened():
-                # Optional: discard buffered frames to reduce lag
+                # Optional: discard buffered frames
                 for _ in range(3):
                     cap.grab()
 
                 success, frame = cap.read()
                 if not success:
                     print("[ERROR] Failed to read frame. Attempting to reconnect...")
-                    break  # Exit to outer loop and reconnect
+                    break  # Try reconnecting
 
                 try:
                     _, buffer = cv2.imencode('.jpg', frame)
@@ -49,11 +65,11 @@ class CameraStreamConsumer(WebsocketConsumer):
                     print(f"[EXCEPTION] Failed to send frame: {e}")
                     break
 
-                time.sleep(0.01)  # ~60 FPS or adjust based on latency
+                time.sleep(0.01)  # adjust FPS if needed
 
             cap.release()
             print("[INFO] Stream released. Reconnecting in 5 seconds...")
-            time.sleep(5)  # Avoid tight reconnect loop
+            time.sleep(5)
 
 # class CameraStreamConsumer(WebsocketConsumer):
 #     def connect(self):

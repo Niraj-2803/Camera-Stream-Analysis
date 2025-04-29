@@ -12,12 +12,15 @@ class Camera(BaseModel):
     name = models.CharField(max_length=100)
     rtsp_url = models.CharField(max_length=500)
     location = models.CharField(max_length=255, blank=True, null=True, default="")
+    username = models.CharField(max_length=100, blank=True, null=True, default="")
+    password = models.CharField(max_length=100, blank=True, null=True, default="")
     is_active = models.BooleanField(default=True)
     created_by = models.ForeignKey(User, on_delete=models.CASCADE, related_name='cameras')
     group = models.ForeignKey(CameraGroup, on_delete=models.SET_NULL, null=True, blank=True, related_name='cameras')
 
     def __str__(self):
         return self.name
+
 
 
 class AiModel(BaseModel):
