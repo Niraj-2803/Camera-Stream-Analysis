@@ -89,7 +89,7 @@ class CameraStreamConsumer(WebsocketConsumer):
                     break
 
                 try:
-                    _, buffer = cv2.imencode('.jpeg', frame)
+                    _, buffer = cv2.imencode('.jpg', frame)
                     self.send(bytes_data=buffer.tobytes())
                 except Exception as e:
                     print(f"[EXCEPTION] Sending frame failed: {e}")
