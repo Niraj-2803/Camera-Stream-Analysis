@@ -46,11 +46,12 @@ class CameraStreamConsumer(WebsocketConsumer):
         return cam.rtsp_url + "?rtsp_transport=tcp"
 
     def send_fallback_frame(self):
-        if self.fallback_buffer:
+        if self.fallback_buffer is not None:
             try:
                 self.send(bytes_data=self.fallback_buffer.tobytes())
             except Exception as e:
                 print(f"[EXCEPTION] Sending fallback frame failed: {e}")
+
 
     def stream_video(self):
         try:
