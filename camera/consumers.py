@@ -16,8 +16,11 @@ class CameraStreamConsumer(WebsocketConsumer):
         self.streaming = False
 
     def build_rtsp_url(self, cam):
+        # If username/password already in URL, don't alter it
+        if "@" in cam.rtsp_url:
+            return cam.rtsp_url
+
         if cam.username and cam.password:
-            # Insert username and password into the RTSP URL
             parts = cam.rtsp_url.split("://")
             if len(parts) == 2:
                 protocol, rest = parts
