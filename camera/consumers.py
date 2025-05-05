@@ -1,3 +1,6 @@
+
+
+import logging
 import cv2
 import threading
 import time
@@ -5,12 +8,9 @@ import os
 from channels.generic.websocket import WebsocketConsumer
 from .models import Camera
 
-import cv2
-import threading
-import time
-import os
-from channels.generic.websocket import WebsocketConsumer
-from .models import Camera
+# Configure logging to output to stdout, which is captured by Gunicorn
+logging.basicConfig(level=logging.DEBUG)  # Change level to DEBUG, INFO, etc. based on your needs
+logger = logging.getLogger(__name__)
 
 class CameraStreamConsumer(WebsocketConsumer):
     def connect(self):
@@ -23,7 +23,6 @@ class CameraStreamConsumer(WebsocketConsumer):
         self.streaming = False
 
     def build_rtsp_url(self, cam):
-        # If username/password already in URL, don't alter it
         if "@" in cam.rtsp_url:
             return cam.rtsp_url
 
@@ -43,58 +42,55 @@ class CameraStreamConsumer(WebsocketConsumer):
 
         rtsp_url = self.build_rtsp_url(cam)
 
-        # Print the RTSP URL to the terminal
-        print(f"[INFO] Connecting to camera stream: {rtsp_url}")
+        # Log the RTSP URL to stdout (which will be captured by Gunicorn)
+        logger.info(f"Connecting to camera stream: {rtsp_url}")
 
         while self.streaming:
             cap = cv2.VideoCapture(rtsp_url)
-            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Set the buffer size to minimize memory consumption
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 360)
-            cap.set(cv2.CAP_PROP_FPS, 30)  # Optionally set FPS if supported
+            cap.set(cv2.CAP_PROP_FPS, 30)
 
             if not cap.isOpened():
-                print("[WARN] Could not open RTSP stream. Retrying in 5 seconds...")
+                logger.warning("Could not open RTSP stream. Retrying in 5 seconds...")
                 time.sleep(5)
                 continue
 
-            print("[INFO] Stream opened successfully.")
+            logger.info("Stream opened successfully.")
 
             while self.streaming and cap.isOpened():
-                # Optional: discard buffered frames
                 for _ in range(3):
                     cap.grab()
 
                 success, frame = cap.read()
                 if not success:
-                    print("[ERROR] Failed to read frame. Sending default image.")
-                    # Load and send the default image "no_frame.jpg"
+                    logger.error("Failed to read frame from stream. Sending default image.")
                     fallback_path = os.path.join(os.path.dirname(__file__), 'no_frame.jpg')
                     fallback_img = cv2.imread(fallback_path)
+
                     if fallback_img is not None:
                         _, self.fallback_buffer = cv2.imencode('.jpg', fallback_img)
+                        self.send(bytes_data=self.fallback_buffer.tobytes())
                     else:
                         self.fallback_buffer = None
-                        print("[WARN] no_frame.jpg not found. Fallback frame unavailable.")
+                        logger.error("no_frame.jpg not found. Sending empty frame.")
+                        self.send(bytes_data=b'')
 
-                    # Send fallback frame if available
-                    if self.fallback_buffer is not None:
-                        self.send(bytes_data=self.fallback_buffer.tobytes())
-
-                    time.sleep(0.01)  # adjust FPS if needed
+                    time.sleep(0.01)
                     continue
 
                 try:
                     _, buffer = cv2.imencode('.jpg', frame)
                     self.send(bytes_data=buffer.tobytes())
                 except Exception as e:
-                    print(f"[EXCEPTION] Failed to send frame: {e}")
+                    logger.exception("Failed to send frame:")
                     break
 
-                time.sleep(0.01)  # adjust FPS if needed
+                time.sleep(0.01)
 
             cap.release()
-            print("[INFO] Stream released. Reconnecting in 5 seconds...")
+            logger.info("Stream released. Reconnecting in 5 seconds...")
             time.sleep(5)
 
 # class CameraStreamConsumer(WebsocketConsumer):
