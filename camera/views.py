@@ -14,6 +14,8 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from .models import Camera
+import requests
+from django.shortcuts import render
 
 class LiveWallAPIView(APIView):
     permission_classes = [IsAuthenticated]
@@ -57,47 +59,47 @@ class LiveWallAPIView(APIView):
             "data": grouped_data
         })
 
-# def generate_frames(rtsp_url, reconnect_delay=5):
-#     print(f"[INFO] Starting stream from: {rtsp_url}")
+def generate_frames(rtsp_url, reconnect_delay=5):
+    print(f"[INFO] Starting stream from: {rtsp_url}")
     
-#     while True:
-#         cap = cv2.VideoCapture(rtsp_url)
+    while True:
+        cap = cv2.VideoCapture(rtsp_url)
         
-#         if not cap.isOpened():
-#             print("[WARN] Failed to open stream. Retrying in 5 seconds...")
-#             time.sleep(reconnect_delay)
-#             continue
+        if not cap.isOpened():
+            print("[WARN] Failed to open stream. Retrying in 5 seconds...")
+            time.sleep(reconnect_delay)
+            continue
         
-#         print("[INFO] Stream opened successfully.")
+        print("[INFO] Stream opened successfully.")
         
-#         while True:
-#             success, frame = cap.read()
+        while True:
+            success, frame = cap.read()
 
-#             if not success:
-#                 print("[ERROR] Failed to read frame. Attempting to reconnect...")
-#                 cap.release()
-#                 time.sleep(reconnect_delay)
-#                 break  # Exit inner loop to retry connection
+            if not success:
+                print("[ERROR] Failed to read frame. Attempting to reconnect...")
+                cap.release()
+                time.sleep(reconnect_delay)
+                break  # Exit inner loop to retry connection
 
-#             # Optional: Resize or process frame here if needed
-#             _, buffer = cv2.imencode(".jpg", frame)
-#             frame_bytes = buffer.tobytes()
+            # Optional: Resize or process frame here if needed
+            _, buffer = cv2.imencode(".jpg", frame)
+            frame_bytes = buffer.tobytes()
 
-#             yield (
-#                 b"--frame\r\n"
-#                 b"Content-Type: image/jpeg\r\n\r\n" + frame_bytes + b"\r\n"
-#             )
+            yield (
+                b"--frame\r\n"
+                b"Content-Type: image/jpeg\r\n\r\n" + frame_bytes + b"\r\n"
+            )
 
 
-# # @login_required
-# def camera_dashboard(request):
-#     token="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzQ1OTk3MTA0LCJpYXQiOjE3NDU5MTA3MDQsImp0aSI6ImYzYWJmM2UzODk0ZTQ4OGM5ZDg5NmVhYzc1YTRjMGMxIiwidXNlcl9pZCI6MX0.t8tr-X3VrVeDDfP5ntXNTrmd3Szqup_oXPrh5bGUt4w"
-#     headers = {"Authorization": f"Bearer {token}"}
-#     api_url = "http://127.0.0.1:8000/api/camera/"
-#     response = requests.get(api_url, headers=headers)
+# @login_required
+def camera_dashboard(request):
+    token="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzQ2NTI1NDk2LCJpYXQiOjE3NDY0MzkwOTYsImp0aSI6IjQzMmM5YzcwNGFhZDQ4NjViNGEzYzYzNTliYzJlZDA1IiwidXNlcl9pZCI6MX0.tG5EFouftZl9hqrN3AmcnJjF8vqKEUbUE1LXnx1mJC8"
+    headers = {"Authorization": f"Bearer {token}"}
+    api_url = "http://127.0.0.1:8000/api/camera/"
+    response = requests.get(api_url, headers=headers)
 
-#     cameras = response.json().get("results", [])  # paginated DRF response
-#     return render(request, "camera/camera_dashboard.html", {"cameras": cameras})
+    cameras = response.json().get("results", [])  # paginated DRF response
+    return render(request, "camera/camera_dashboard.html", {"cameras": cameras})
 
 
 class CameraPagination(PageNumberPagination):
