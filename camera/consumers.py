@@ -5,6 +5,13 @@ import os
 from channels.generic.websocket import WebsocketConsumer
 from .models import Camera
 
+import cv2
+import threading
+import time
+import os
+from channels.generic.websocket import WebsocketConsumer
+from .models import Camera
+
 class CameraStreamConsumer(WebsocketConsumer):
     def connect(self):
         self.camera_id = self.scope["url_route"]["kwargs"]["camera_id"]
@@ -36,6 +43,7 @@ class CameraStreamConsumer(WebsocketConsumer):
 
         rtsp_url = self.build_rtsp_url(cam)
 
+        # Print the RTSP URL to the terminal
         print(f"[INFO] Connecting to camera stream: {rtsp_url}")
 
         while self.streaming:
@@ -68,6 +76,10 @@ class CameraStreamConsumer(WebsocketConsumer):
                     else:
                         self.fallback_buffer = None
                         print("[WARN] no_frame.jpg not found. Fallback frame unavailable.")
+
+                    # Send fallback frame if available
+                    if self.fallback_buffer is not None:
+                        self.send(bytes_data=self.fallback_buffer.tobytes())
 
                     time.sleep(0.01)  # adjust FPS if needed
                     continue
