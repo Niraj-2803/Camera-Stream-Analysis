@@ -1,7 +1,7 @@
-# consumers.py
 import cv2
 import threading
 import time
+import os
 from channels.generic.websocket import WebsocketConsumer
 from .models import Camera
 
@@ -40,9 +40,10 @@ class CameraStreamConsumer(WebsocketConsumer):
 
         while self.streaming:
             cap = cv2.VideoCapture(rtsp_url)
-            cap.set(cv2.CAP_PROP_BUFFERSIZE, 0)
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Set the buffer size to minimize memory consumption
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 360)
+            cap.set(cv2.CAP_PROP_FPS, 30)  # Optionally set FPS if supported
 
             if not cap.isOpened():
                 print("[WARN] Could not open RTSP stream. Retrying in 5 seconds...")
@@ -58,8 +59,18 @@ class CameraStreamConsumer(WebsocketConsumer):
 
                 success, frame = cap.read()
                 if not success:
-                    print("[ERROR] Failed to read frame. Attempting to reconnect...")
-                    break  # Try reconnecting
+                    print("[ERROR] Failed to read frame. Sending default image.")
+                    # Load and send the default image "no_frame.jpg"
+                    fallback_path = os.path.join(os.path.dirname(__file__), 'no_frame.jpg')
+                    fallback_img = cv2.imread(fallback_path)
+                    if fallback_img is not None:
+                        _, self.fallback_buffer = cv2.imencode('.jpg', fallback_img)
+                    else:
+                        self.fallback_buffer = None
+                        print("[WARN] no_frame.jpg not found. Fallback frame unavailable.")
+
+                    time.sleep(0.01)  # adjust FPS if needed
+                    continue
 
                 try:
                     _, buffer = cv2.imencode('.jpg', frame)
