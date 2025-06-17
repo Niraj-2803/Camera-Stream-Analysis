@@ -23,17 +23,22 @@ class Camera(BaseModel):
 
 
 
-class AiModel(BaseModel):
+class AiModel(models.Model):
     name = models.CharField(max_length=100)
     function_name = models.CharField(max_length=100)
-    
+    icon = models.CharField(max_length=200, default="")  # Path to icon as string
+    version = models.CharField(max_length=10, default="1.0")
+    status = models.CharField(max_length=20, default="Inactive")
+
     def __str__(self):
         return self.name
+
     
     
 class UserAiModel(BaseModel):
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='user_models')
-    aimodel = models.ForeignKey(AiModel, on_delete=models.CASCADE, related_name='user_models')
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='user')
+    aimodel = models.ForeignKey(AiModel, on_delete=models.CASCADE, related_name='ai')
+    camera = models.ForeignKey(Camera, on_delete=models.CASCADE, related_name='camera')
     is_active = models.BooleanField(default=False)
 
     class Meta:

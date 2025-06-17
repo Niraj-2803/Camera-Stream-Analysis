@@ -8,6 +8,8 @@ urlpatterns = [
     path('api/group/<int:group_id>/cameras/', ListCamerasInGroupAPIView.as_view()),
     path('aimodels/activate/', ActivateAiModelView.as_view(), name='activate-ai-model'),
     path('dashboard/', camera_dashboard, name='camera-dashboard'),
-    path('api/ai-models/create/', CreateAiModelView.as_view(), name='create-ai-model'),
+    path('api/ai-models/', CreateAiModelView.as_view(), name='create-ai-model'),
+    path('user-aimodels/', UserAiModelView.as_view(), name='user-aimodels'),
+
 
 ]

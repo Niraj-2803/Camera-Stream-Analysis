@@ -1,5 +1,3 @@
-
-
 import logging
 import cv2
 import threading
@@ -33,6 +31,19 @@ class CameraStreamConsumer(WebsocketConsumer):
                 return f"{protocol}://{cam.username}:{cam.password}@{rest}"
         return cam.rtsp_url
 
+    def send_fallback_frame(self):
+        # Load fallback image only once
+        fallback_path = os.path.join(os.path.dirname(__file__), 'no_frame.jpg')
+        fallback_img = cv2.imread(fallback_path)
+
+        if fallback_img is not None:
+            _, self.fallback_buffer = cv2.imencode('.jpg', fallback_img)
+            self.send(bytes_data=self.fallback_buffer.tobytes())
+        else:
+            self.fallback_buffer = None
+            logger.error("no_frame.jpg not found. Sending empty frame.")
+            self.send(bytes_data=b'')  # Send empty frame if no_frame.jpg is missing
+
     def stream_video(self):
         try:
             cam = Camera.objects.get(id=self.camera_id)
@@ -54,30 +65,21 @@ class CameraStreamConsumer(WebsocketConsumer):
 
             if not cap.isOpened():
                 logger.warning("Could not open RTSP stream. Retrying in 5 seconds...")
+                self.send_fallback_frame()  # Send fallback image when stream is unavailable
                 time.sleep(5)
                 continue
 
             logger.info("Stream opened successfully.")
 
             while self.streaming and cap.isOpened():
-                for _ in range(3):
+                for _ in range(3):  # Discard a few frames to ensure we don't send old frames
                     cap.grab()
 
                 success, frame = cap.read()
                 if not success:
-                    logger.error("Failed to read frame from stream. Sending default image.")
-                    fallback_path = os.path.join(os.path.dirname(__file__), 'no_frame.jpg')
-                    fallback_img = cv2.imread(fallback_path)
-
-                    if fallback_img is not None:
-                        _, self.fallback_buffer = cv2.imencode('.jpg', fallback_img)
-                        self.send(bytes_data=self.fallback_buffer.tobytes())
-                    else:
-                        self.fallback_buffer = None
-                        logger.error("no_frame.jpg not found. Sending empty frame.")
-                        self.send(bytes_data=b'')
-
-                    time.sleep(0.01)
+                    logger.error("Failed to read frame from stream. Sending fallback image.")
+                    self.send_fallback_frame()  # Send fallback image if no frame is read
+                    time.sleep(0.01)  # Avoid tight loop, small delay before retrying
                     continue
 
                 try:
@@ -87,11 +89,11 @@ class CameraStreamConsumer(WebsocketConsumer):
                     logger.exception("Failed to send frame:")
                     break
 
-                time.sleep(0.01)
+                time.sleep(0.01)  # Control frame rate (100 fps limit here)
 
             cap.release()
             logger.info("Stream released. Reconnecting in 5 seconds...")
-            time.sleep(5)
+            time.sleep(5)  # Wait before trying to reconnect
 
 # class CameraStreamConsumer(WebsocketConsumer):
 #     def connect(self):

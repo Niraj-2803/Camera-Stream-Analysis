@@ -2,7 +2,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, permissions
 from .models import Camera, CameraGroup, UserAiModel, AiModel
-from .serializers import AiModelSerializer, CameraGroupActionSerializer, CameraSerializer, UserAiModelSerializer, UserAiModelActionSerializer
+from .serializers import AiModelSerializer, AssignAiModelSerializer, CameraGroupActionSerializer, CameraSerializer, UserAiModelSerializer, UserAiModelActionSerializer, UserCameraQuerySerializer
 from django.shortcuts import get_object_or_404
 from drf_yasg.utils import swagger_auto_schema
 from rest_framework.generics import GenericAPIView
@@ -182,6 +182,7 @@ class AddCameraToGroupAPIView(APIView):
             status=status.HTTP_200_OK
         )
 
+
 class ListCamerasInGroupAPIView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
@@ -207,7 +208,7 @@ class CreateAiModelView(APIView):
         request_body=AiModelSerializer,
         responses={201: AiModelSerializer, 400: "Bad Request"},
         operation_summary="Create AI Model",
-        operation_description="Creates a new AI model with a name and function_name."
+        operation_description="Creates a new AI model with name, function_name, icon, version, and status."
     )
     def post(self, request):
         serializer = AiModelSerializer(data=request.data)
@@ -215,3 +216,89 @@ class CreateAiModelView(APIView):
             serializer.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    @swagger_auto_schema(
+        responses={200: AiModelSerializer(many=True)},
+        operation_summary="List AI Models",
+        operation_description="Returns a list of all AI models."
+    )
+    def get(self, request):
+        queryset = AiModel.objects.all()
+        serializer = AiModelSerializer(queryset, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status, permissions
+from drf_yasg.utils import swagger_auto_schema
+from drf_yasg import openapi
+
+from camera.models import UserAiModel, AiModel, Camera
+from users.models import User
+from camera.serializers import UserAiModelSerializer
+
+class UserAiModelView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    
+class UserAiModelView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    @swagger_auto_schema(
+        request_body=AssignAiModelSerializer,
+        responses={201: "Created", 400: "Bad Request"},
+        operation_summary="Assign AI Models to User",
+        operation_description="Assigns a list of AiModels to a user and camera."
+    )
+    def post(self, request):
+        serializer = AssignAiModelSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=400)
+
+        user_id = serializer.validated_data['user_id']
+        camera_id = serializer.validated_data['camera_id']
+        ai_model_ids = serializer.validated_data['ai_model_ids']
+
+        try:
+            user = User.objects.get(id=user_id)
+            camera = Camera.objects.get(id=camera_id)
+        except (User.DoesNotExist, Camera.DoesNotExist):
+            return Response({"detail": "Invalid user or camera ID."}, status=404)
+
+        created_items = []
+        for model_id in ai_model_ids:
+            try:
+                aimodel = AiModel.objects.get(id=model_id)
+                obj, created = UserAiModel.objects.get_or_create(
+                    user=user,
+                    aimodel=aimodel,
+                    camera=camera,
+                    defaults={"is_active": True}
+                )
+                if created:
+                    created_items.append(obj.id)
+            except AiModel.DoesNotExist:
+                continue
+
+        return Response({"created_ids": created_items}, status=201)
+
+    @swagger_auto_schema(
+        query_serializer=UserCameraQuerySerializer,
+        responses={200: AiModelSerializer(many=True)},
+        operation_summary="Get AI Models for User and Camera",
+        operation_description="Returns AI models assigned to a specific user and camera."
+    )
+    def get(self, request):
+        serializer = UserCameraQuerySerializer(data=request.query_params)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=400)
+
+        user_id = serializer.validated_data['user_id']
+        camera_id = serializer.validated_data['camera_id']
+
+        user_models = UserAiModel.objects.filter(user_id=user_id, camera_id=camera_id).select_related('aimodel')
+        ai_models = [um.aimodel for um in user_models]
+
+        serialized_data = AiModelSerializer(ai_models, many=True)
+        return Response(serialized_data.data, status=200)

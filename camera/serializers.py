@@ -19,7 +19,7 @@ class CameraSerializer(serializers.ModelSerializer):
 class AiModelSerializer(serializers.ModelSerializer):
     class Meta:
         model = AiModel
-        fields = ['id', 'name', 'function_name']
+        fields = ['id', 'name', 'function_name', 'icon', 'version', 'status']
 
 class UserAiModelSerializer(serializers.ModelSerializer):
     class Meta:
@@ -42,3 +42,25 @@ class CameraGroupActionSerializer(serializers.Serializer):
     camera_ids = serializers.ListField(
         child=serializers.IntegerField(), allow_empty=False
     )
+
+
+
+class UserAiModelDetailSerializer(serializers.ModelSerializer):
+    aimodel = AiModelSerializer()  # shows detailed AiModel info
+    camera = serializers.StringRelatedField()
+    user = serializers.StringRelatedField()
+
+    class Meta:
+        model = UserAiModel
+        fields = ['id', 'user', 'aimodel', 'camera', 'is_active']
+
+class AssignAiModelSerializer(serializers.Serializer):
+    user_id = serializers.IntegerField(required=True)
+    camera_id = serializers.IntegerField(required=True)
+    ai_model_ids = serializers.ListField(
+        child=serializers.IntegerField(), required=True, allow_empty=False
+    )
+
+class UserCameraQuerySerializer(serializers.Serializer):
+    user_id = serializers.IntegerField(required=True)
+    camera_id = serializers.IntegerField(required=True)
