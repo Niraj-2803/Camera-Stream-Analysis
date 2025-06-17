@@ -95,6 +95,7 @@ class CameraStreamConsumer(WebsocketConsumer):
             logger.info("Stream released. Reconnecting in 5 seconds...")
             time.sleep(5)  # Wait before trying to reconnect
 
+
 # class CameraStreamConsumer(WebsocketConsumer):
 #     def connect(self):
 #         self.camera_id = self.scope["url_route"]["kwargs"]["camera_id"]
