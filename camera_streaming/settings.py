@@ -71,6 +71,8 @@ ROOT_URLCONF = 'camera_streaming.urls'
 
 CORS_ALLOWED_ORIGINS = env.list("CORS_ALLOWED_ORIGINS")
 
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+
 CORS_ALLOW_CREDENTIALS = True
 
 # Optional: Allow all methods like POST, GET, PUT etc
