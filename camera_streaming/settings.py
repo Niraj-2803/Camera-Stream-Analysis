@@ -67,7 +67,7 @@ MIDDLEWARE = [
 
 ROOT_URLCONF = 'camera_streaming.urls'
 
-CORS_ALLOW_ALL_ORIGINS = True  # 🚀 Allow all (only safe for local/dev)
+# CORS_ALLOW_ALL_ORIGINS = True  # 🚀 Allow all (only safe for local/dev)
 
 CORS_ALLOWED_ORIGINS = env.list("CORS_ALLOWED_ORIGINS")
 
