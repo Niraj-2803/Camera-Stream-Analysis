@@ -4,7 +4,7 @@ from rest_framework import status, permissions
 from rest_framework_simplejwt.tokens import RefreshToken
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
-from .serializers import RegisterSerializer, LoginSerializer
+from .serializers import RegisterSerializer, LoginSerializer, UserSerializer
 
 
 # Token generation helper
@@ -27,13 +27,21 @@ class RegisterView(APIView):
 
 class LoginView(APIView):
     permission_classes = [permissions.AllowAny]
-    @swagger_auto_schema(request_body=LoginSerializer, responses={200: "Tokens"})
+
+    @swagger_auto_schema(request_body=LoginSerializer, responses={200: "Tokens and User Data"})
     def post(self, request):
         serializer = LoginSerializer(data=request.data)
         if serializer.is_valid():
             user = serializer.validated_data['user']
             tokens = get_tokens_for_user(user)
-            return Response({'tokens': tokens}, status=status.HTTP_200_OK)
+
+            user_data = UserSerializer(user).data  # Add this line to serialize user
+
+            return Response({
+                'tokens': tokens,
+                'user': user_data  # Include user info in the response
+            }, status=status.HTTP_200_OK)
+
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 class LogoutView(APIView):
