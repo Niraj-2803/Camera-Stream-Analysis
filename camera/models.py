@@ -21,8 +21,6 @@ class Camera(BaseModel):
     def __str__(self):
         return self.name
 
-
-
 class AiModel(models.Model):
     name = models.CharField(max_length=100)
     function_name = models.CharField(max_length=100)
@@ -33,8 +31,7 @@ class AiModel(models.Model):
     def __str__(self):
         return self.name
 
-    
-    
+
 class UserAiModel(BaseModel):
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='user')
     aimodel = models.ForeignKey(AiModel, on_delete=models.CASCADE, related_name='ai')

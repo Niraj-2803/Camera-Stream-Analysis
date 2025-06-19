@@ -35,7 +35,8 @@ class LiveWallAPIView(APIView):
                 "id": cam.id,
                 "camera_name": cam.name,
                 "location": cam.location or "",
-                "ws_stream_url": f"{base_url}/ws/stream/{cam.id}/"
+                # Include user_id and camera_id in the ws_stream_url
+                "ws_stream_url": f"{base_url}/ws/stream/{user.id}/{cam.id}/?mode=normal"
             }
 
             # Add to full camera list
@@ -58,6 +59,8 @@ class LiveWallAPIView(APIView):
             "cameras": all_cameras,
             "data": grouped_data
         })
+
+
 
 def generate_frames(rtsp_url, reconnect_delay=5):
     print(f"[INFO] Starting stream from: {rtsp_url}")
@@ -122,7 +125,6 @@ class CameraListCreateView(GenericAPIView, ListModelMixin):
             serializer.save(created_by=request.user)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
 
 
 class ActivateAiModelView(APIView):

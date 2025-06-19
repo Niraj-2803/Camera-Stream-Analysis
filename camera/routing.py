@@ -1,6 +1,6 @@
-from django.urls import re_path
+from django.urls import path
 from . import consumers
 
 websocket_urlpatterns = [
-    re_path(r'ws/stream/(?P<camera_id>\d+)/$', consumers.CameraStreamConsumer.as_asgi()),
+path('ws/stream/<int:user_id>/<int:camera_id>/<str:mode>/', consumers.CameraStreamConsumer.as_asgi()),
 ]

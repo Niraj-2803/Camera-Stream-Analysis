@@ -4,26 +4,128 @@ import threading
 import time
 import os
 from channels.generic.websocket import WebsocketConsumer
+
+from camera.aimodels.helper import *
 from .models import Camera
 
 # Configure logging to output to stdout, which is captured by Gunicorn
 logging.basicConfig(level=logging.DEBUG)  # Change level to DEBUG, INFO, etc. based on your needs
 logger = logging.getLogger(__name__)
 
+# class CameraStreamConsumer(WebsocketConsumer):
+#     def connect(self):
+#         self.camera_id = self.scope["url_route"]["kwargs"]["camera_id"]
+#         self.accept()
+#         self.streaming = True
+#         threading.Thread(target=self.stream_video, daemon=True).start()
+
+#     def disconnect(self, close_code):
+#         self.streaming = False
+
+#     def build_rtsp_url(self, cam):
+#         if "@" in cam.rtsp_url:
+#             return cam.rtsp_url
+
+#         if cam.username and cam.password:
+#             parts = cam.rtsp_url.split("://")
+#             if len(parts) == 2:
+#                 protocol, rest = parts
+#                 return f"{protocol}://{cam.username}:{cam.password}@{rest}"
+#         return cam.rtsp_url
+
+#     def send_fallback_frame(self):
+#         # Load fallback image only once
+#         fallback_path = os.path.join(os.path.dirname(__file__), 'no_frame.jpg')
+#         fallback_img = cv2.imread(fallback_path)
+
+#         if fallback_img is not None:
+#             _, self.fallback_buffer = cv2.imencode('.jpg', fallback_img)
+#             self.send(bytes_data=self.fallback_buffer.tobytes())
+#         else:
+#             self.fallback_buffer = None
+#             logger.error("no_frame.jpg not found. Sending empty frame.")
+#             self.send(bytes_data=b'')  # Send empty frame if no_frame.jpg is missing
+
+#     def stream_video(self):
+#         try:
+#             cam = Camera.objects.get(id=self.camera_id)
+#         except Camera.DoesNotExist:
+#             self.close()
+#             return
+
+#         rtsp_url = self.build_rtsp_url(cam)
+
+#         # Log the RTSP URL to stdout (which will be captured by Gunicorn)
+#         logger.info(f"Connecting to camera stream: {rtsp_url}")
+
+#         while self.streaming:
+#             cap = cv2.VideoCapture(rtsp_url)
+#             cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+#             cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+#             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 360)
+#             cap.set(cv2.CAP_PROP_FPS, 30)
+
+#             if not cap.isOpened():
+#                 logger.warning("Could not open RTSP stream. Retrying in 5 seconds...")
+#                 self.send_fallback_frame()  # Send fallback image when stream is unavailable
+#                 time.sleep(5)
+#                 continue
+
+#             logger.info("Stream opened successfully.")
+
+#             while self.streaming and cap.isOpened():
+#                 for _ in range(3):  # Discard a few frames to ensure we don't send old frames
+#                     cap.grab()
+
+#                 success, frame = cap.read()
+#                 if not success:
+#                     logger.error("Failed to read frame from stream. Sending fallback image.")
+#                     self.send_fallback_frame()  # Send fallback image if no frame is read
+#                     time.sleep(0.01)  # Avoid tight loop, small delay before retrying
+#                     continue
+
+#                 try:
+#                     _, buffer = cv2.imencode('.jpg', frame)
+#                     self.send(bytes_data=buffer.tobytes())
+#                 except Exception as e:
+#                     logger.exception("Failed to send frame:")
+#                     break
+
+#                 time.sleep(0.01)  # Control frame rate (100 fps limit here)
+
+#             cap.release()
+#             logger.info("Stream released. Reconnecting in 5 seconds...")
+#             time.sleep(5)  # Wait before trying to reconnect
+
+
 class CameraStreamConsumer(WebsocketConsumer):
     def connect(self):
+        # Extract user_id and camera_id from the URL
+        self.user_id = self.scope["url_route"]["kwargs"]["user_id"]
         self.camera_id = self.scope["url_route"]["kwargs"]["camera_id"]
+        
         self.accept()
         self.streaming = True
-        threading.Thread(target=self.stream_video, daemon=True).start()
+        print(f"📡 Camera stream started for user {self.user_id}, camera {self.camera_id}.")
+        
+        # Check if the mode is 'aimodel'
+        mode = self.scope.get('mode', '')  # Get the mode parameter from the WebSocket scope
+        
+        # If mode is 'aimodel', use the AI model for posture and occupancy tracking
+        if mode == "aimodel":
+            print("🌐 Mode set to 'aimodel'. Initiating AI model stream with posture and occupancy tracking.")
+            threading.Thread(target=self.stream_posture_and_occupancy, daemon=True).start()
+        else:
+            # Start normal streaming in a new thread
+            threading.Thread(target=self.stream_video, daemon=True).start()
 
     def disconnect(self, close_code):
         self.streaming = False
+        print(f"🛑 Camera {self.camera_id} stream stopped for user {self.user_id}.")
 
     def build_rtsp_url(self, cam):
         if "@" in cam.rtsp_url:
             return cam.rtsp_url
-
         if cam.username and cam.password:
             parts = cam.rtsp_url.split("://")
             if len(parts) == 2:
@@ -32,102 +134,116 @@ class CameraStreamConsumer(WebsocketConsumer):
         return cam.rtsp_url
 
     def send_fallback_frame(self):
-        # Load fallback image only once
         fallback_path = os.path.join(os.path.dirname(__file__), 'no_frame.jpg')
         fallback_img = cv2.imread(fallback_path)
-
         if fallback_img is not None:
             _, self.fallback_buffer = cv2.imencode('.jpg', fallback_img)
             self.send(bytes_data=self.fallback_buffer.tobytes())
+            print("⚠️ Sending fallback frame (no frame available).")
         else:
             self.fallback_buffer = None
-            logger.error("no_frame.jpg not found. Sending empty frame.")
             self.send(bytes_data=b'')  # Send empty frame if no_frame.jpg is missing
+            print("❌ no_frame.jpg missing, sending empty frame.")
 
     def stream_video(self):
         try:
+            # Fetch the camera based on camera_id
             cam = Camera.objects.get(id=self.camera_id)
+            print(f"🔗 Camera found: {cam.id} - {cam.rtsp_url}")
         except Camera.DoesNotExist:
+            print(f"❌ Camera with ID {self.camera_id} does not exist.")
             self.close()
             return
 
         rtsp_url = self.build_rtsp_url(cam)
+        cap = cv2.VideoCapture(rtsp_url)
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 360)
+        cap.set(cv2.CAP_PROP_FPS, 30)
 
-        # Log the RTSP URL to stdout (which will be captured by Gunicorn)
-        logger.info(f"Connecting to camera stream: {rtsp_url}")
+        if not cap.isOpened():
+            print(f"❌ Failed to open RTSP stream. Retrying...")
+            self.send_fallback_frame()
+            self.close()
+            return
+
+        print("✅ RTSP stream opened successfully.")
+        frame_counter = 0  # Frame counter to track frames processed
 
         while self.streaming:
-            cap = cv2.VideoCapture(rtsp_url)
-            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 360)
-            cap.set(cv2.CAP_PROP_FPS, 30)
-
-            if not cap.isOpened():
-                logger.warning("Could not open RTSP stream. Retrying in 5 seconds...")
-                self.send_fallback_frame()  # Send fallback image when stream is unavailable
-                time.sleep(5)
+            ret, frame = cap.read()
+            if not ret:
+                print("⚠️ Frame not received. Skipping...")
+                self.send_fallback_frame()
                 continue
+            frame_counter += 1
 
-            logger.info("Stream opened successfully.")
+            # Print "Hello Rajesh" every 10 frames
+            if frame_counter % 10 == 0:
+                print("Hello Rajesh")
 
-            while self.streaming and cap.isOpened():
-                for _ in range(3):  # Discard a few frames to ensure we don't send old frames
-                    cap.grab()
+            # Send the processed frame
+            _, buffer = cv2.imencode('.jpg', frame)
+            self.send(bytes_data=buffer.tobytes())  # Send the processed frame
 
-                success, frame = cap.read()
-                if not success:
-                    logger.error("Failed to read frame from stream. Sending fallback image.")
-                    self.send_fallback_frame()  # Send fallback image if no frame is read
-                    time.sleep(0.01)  # Avoid tight loop, small delay before retrying
-                    continue
+            time.sleep(0.01)  # Control frame rate (adjust if necessary)
 
-                try:
-                    _, buffer = cv2.imencode('.jpg', frame)
-                    self.send(bytes_data=buffer.tobytes())
-                except Exception as e:
-                    logger.exception("Failed to send frame:")
-                    break
+        cap.release()
+        self.close()
 
-                time.sleep(0.01)  # Control frame rate (100 fps limit here)
+    def stream_posture_and_occupancy(self):
+        try:
+            # Fetch the camera based on camera_id
+            cam = Camera.objects.get(id=self.camera_id)
+            print(f"🔗 Camera found: {cam.id} - {cam.rtsp_url}")
+        except Camera.DoesNotExist:
+            print(f"❌ Camera with ID {self.camera_id} does not exist.")
+            self.close()
+            return
 
-            cap.release()
-            logger.info("Stream released. Reconnecting in 5 seconds...")
-            time.sleep(5)  # Wait before trying to reconnect
+        # Fetch and execute user-specific AI models based on the user and camera
+        print(f"Fetching and executing AI models for user {self.user_id} and camera {self.camera_id}.")
+        
+        rtsp_url = self.build_rtsp_url(cam)
+        cap = cv2.VideoCapture(rtsp_url)
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 360)
+        cap.set(cv2.CAP_PROP_FPS, 30)
 
+        if not cap.isOpened():
+            print(f"❌ Failed to open RTSP stream. Retrying...")
+            self.send_fallback_frame()
+            self.close()
+            return
 
-# class CameraStreamConsumer(WebsocketConsumer):
-#     def connect(self):
-#         self.camera_id = self.scope["url_route"]["kwargs"]["camera_id"]
-#         self.accept()
-#         self.streaming = True
-#         self.thread = threading.Thread(target=self.stream_video)
-#         self.thread.start()
+        print("✅ RTSP stream opened successfully.")
+        frame_counter = 0  # Frame counter to track frames processed
 
-#     def disconnect(self, close_code):
-#         self.streaming = False
+        while self.streaming:
+            ret, frame = cap.read()
+            if not ret:
+                print("⚠️ Frame not received. Skipping...")
+                self.send_fallback_frame()
+                continue
+            frame_counter += 1
 
-#     def stream_video(self):
-#         from .models import Camera
-#         cam = Camera.objects.get(id=self.camera_id)
-#         cap = cv2.VideoCapture(cam.rtsp_url)
+            # Print "Hello Rajesh" every 10 frames
+            if frame_counter % 10 == 0:
+                print("Hello Rajesh")
 
-#         model = YOLO("yolov8n.pt")  # Or your custom model for person detection
+            # Execute AI models and process frame for posture and occupancy
+            try:
+                execute_user_ai_models(self.user_id, self.camera_id, frame, save_to_json=False)
+            except Exception as e:
+                print(f"⚠️ Error during AI model execution: {e}. Continuing with the next frame.")
 
-#         while self.streaming:
-#             success, frame = cap.read()
-#             if not success:
-#                 continue
+            # Send the processed frame
+            _, buffer = cv2.imencode('.jpg', frame)
+            self.send(bytes_data=buffer.tobytes())  # Send the processed frame
 
-#             # Detect
-#             results = model(frame)[0].boxes  # Get detections
+            time.sleep(0.01)  # Control frame rate (adjust if necessary)
 
-#             # Blur faces (upper body assumed to contain face)
-#             frame = blur_faces(frame, results)
-
-#             # Encode + Send
-#             _, buffer = cv2.imencode('.jpg', frame)
-#             self.send(bytes_data=buffer.tobytes())
-#             time.sleep(0.05)  # ~20fps
-
-#         cap.release()
+        cap.release()
+        self.close()

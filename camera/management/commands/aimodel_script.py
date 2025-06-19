@@ -8,6 +8,14 @@ class Command(BaseCommand):
     def handle(self, *args, **kwargs):
         app_stack_data = [
             {
+                "title": "Track Posture & Occupancy",
+                "icon": "/icons/posture.png",
+                "version": "3.2",
+                "status": "Active",
+                "model_name": "track_posture_and_occupancy",
+                "description": "Tracks human posture and seat occupancy in real-time. It monitors posture (e.g., standing, sitting) and updates seat occupancy statistics.",
+            },
+            {
                 "title": "camera Tampering",
                 "icon": "/icons/nest_cam_iq.svg",
                 "version": "3.2",
