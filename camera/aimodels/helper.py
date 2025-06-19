@@ -386,62 +386,56 @@ def draw_label(img, text, org, font=cv2.FONT_HERSHEY_SIMPLEX,
 
 import json
 
-def execute_user_ai_models(user_id, camera_id, frame, save_to_json=False):
+def execute_user_ai_models(user_id, camera_id, frame, rtsp_url=None, save_to_json=False):
     print(f'{user_id=}')
     print(f'{camera_id=}')
     
-    # Fetch all UserAiModel instances for the given user and camera
     user_ai_models = UserAiModel.objects.filter(user_id=user_id, camera_id=camera_id, is_active=True)
 
-    # Loop through each related AiModel and execute the corresponding function
     for user_ai_model in user_ai_models:
         ai_model = user_ai_model.aimodel
-        print(f'{ai_model=}')
-        
-        # Get the function name from the AiModel instance
         function_name = ai_model.function_name
         print(f'Calling function: {function_name}')
-        
-        # Dynamically map the function name to the actual function
+
         function_map = {
             "blur_faces": blur_faces,
             "pixelate_people": pixelate_people,
             "count_people": count_people,
             "generate_people_heatmap": generate_people_heatmap,
-            "track_posture_and_occupancy": track_posture_and_occupancy  # New function for posture tracking
+            "track_posture_and_occupancy": track_posture_and_occupancy
         }
 
-        # Check if the function exists in the map
         if function_name in function_map:
             function_to_execute = function_map[function_name]
             print(f"Executing {function_name} for user {user_id} and camera {camera_id}.")
-            
-            # If it's the 'track_posture' function, pass the correct arguments
+
             if function_name == "track_posture_and_occupancy":
+                if not rtsp_url:
+                    print("❌ RTSP URL is required for posture tracking.")
+                    continue
                 try:
                     result = function_to_execute(
-                        model="yolo11m-pose.pt",  # You can replace with the appropriate model path
-                        source=f"rtsp://camera_{camera_id}_url",  # Replace with actual camera RTSP URL
+                        model="yolo11m-pose.pt",
+                        source=rtsp_url,
                         output_path="output_video.mp4",
-                        stats_file='stats.json',  # You can specify stats output
-                        show=True  # Or set this to False based on your needs
+                        stats_file='stats.json',
+                        show=True
                     )
                     if save_to_json:
-                        # Save data to a JSON file after processing
                         save_sample_data_to_json(user_id, camera_id, result)
                 except Exception as e:
                     print(f"❌ Error during posture tracking execution: {e}")
-
             else:
-                # For other AI models like `blur_faces`, `count_people`, etc.
                 try:
-                    boxes = []  # Replace this with actual detected boxes from your model
+                    boxes = []  # Replace with real boxes if needed
                     processed_frame = function_to_execute(frame, boxes)
                     print(f"Processed frame using {function_name}.")
                 except Exception as e:
                     print(f"❌ Error during {function_name} execution: {e}")
         else:
-            print(f"❌ No function found for AiModel {ai_model.function_name}.")
+            print(f"❌ No function found for AiModel {function_name}.")
+
+
 
 def save_sample_data_to_json(user_id, camera_id, frame):
     sample_data = {

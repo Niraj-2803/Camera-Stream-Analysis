@@ -209,6 +209,12 @@ class CameraStreamConsumer(WebsocketConsumer):
 
         # Define the frame processing callback for posture and occupancy
         def process_frame_callback(frame):
-            execute_user_ai_models(self.user_id, self.camera_id, frame, save_to_json=False)
+            execute_user_ai_models(
+                user_id=self.user_id,
+                camera_id=self.camera_id,
+                frame=frame,
+                rtsp_url=rtsp_url,
+                save_to_json=False
+            )
 
         self._stream_camera(rtsp_url, process_frame_callback)
