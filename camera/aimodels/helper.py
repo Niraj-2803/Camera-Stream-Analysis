@@ -204,201 +204,124 @@ from collections import defaultdict
 
 
 # Function to process posture and occupancy tracking
-# def track_posture_and_occupancy(model, source, output_path, stats_file='stats.json', show=True):
-#     print(f"🔗 Opening video source: {source}")
-#     cap = cv2.VideoCapture(source)
-#     if not cap.isOpened():
-#         print(f"❌ Unable to open video source {source}")
-#         return
+def track_posture_and_occupancy(model, source, output_path, stats_file='stats.json', show=True):
+    print(f"🔗 Opening video source: {source}")
+    cap = cv2.VideoCapture(source)
+    if not cap.isOpened():
+        print(f"❌ Unable to open video source {source}")
+        return
 
-#     fps = cap.get(cv2.CAP_PROP_FPS) or 25
-#     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-#     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-#     print(f"✅ Video source opened. FPS: {fps}, Resolution: {w}x{h}")
+    fps = cap.get(cv2.CAP_PROP_FPS) or 25
+    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    print(f"✅ Video source opened. FPS: {fps}, Resolution: {w}x{h}")
 
-#     writer = cv2.VideoWriter(output_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
+    writer = cv2.VideoWriter(output_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
 
-#     # Seat polygons and tracking (add seat coordinates here)
-#     seats = { ... }  # Define your seat polygons here
-#     seat_poly = {n: Polygon(pts) for n, pts in seats.items()}
-#     stats = {s: defaultdict(float) for s in seats}
-#     owner_tid = {s: None for s in seats}
-#     owner_miss = {s: 0 for s in seats}
+    # Seat polygons and tracking (add seat coordinates here)
+    seats = {
+            'seat_1': [(343.2,368.9),(507.3,275.4),(431.7,157.4),(235.5,222.8)],
+            'seat_2': [(348.3,374.1),(517.6,290.8),(621.4,438.2),(448.3,533.1)],
+            'seat_3': [(463.7,563.8),(670.1,501.0),(804.1,719.0),(522.7,719.0)],
+            'seat_4': [(818.8,575.4),(1025.3,429.2),(1250.9,594.6),
+                    (1137.2,719.0),(843.2,719.0),(770.1,617.7)],
+            'seat_5': [(665.0,353.6),(838.1,238.2),(1011.2,427.9),(811.2,574.1)],
+        }    
+    seat_poly = {n: Polygon(pts) for n, pts in seats.items()}
+    stats = {s: defaultdict(float) for s in seats}
+    owner_tid = {s: None for s in seats}
+    owner_miss = {s: 0 for s in seats}
 
-#     print(f"⚙️ YOLO Model loading: {model}")
-#     model = YOLO(model)  # Load the YOLO model
-#     print(f"✅ Model {model} loaded successfully.")
+    print(f"⚙️ YOLO Model loading: {model}")
+    model = YOLO(model)  # Load the YOLO model
+    print(f"✅ Model {model} loaded successfully.")
 
-#     frame_idx = 0
-#     last_dump = time.time()
+    frame_idx = 0
+    last_dump = time.time()
 
-#     # Start processing frames
-#     print("🎥 Start processing frames...")
-#     for res in model.track(source=source, stream=True, verbose=False):
-#         frame_idx += 1
-#         frame = res.orig_img.copy()
+    # Start processing frames
+    print("🎥 Start processing frames...")
+    for res in model.track(source=source, stream=True, verbose=False):
+        frame_idx += 1
+        frame = res.orig_img.copy()
 
-#         kps = res.keypoints.xy.cpu().numpy()
-#         kconf = res.keypoints.conf.cpu().numpy()
-#         boxes = res.boxes.xyxy.cpu().numpy()
-#         tids = res.boxes.id.cpu().numpy()
+        kps = res.keypoints.xy.cpu().numpy()
+        kconf = res.keypoints.conf.cpu().numpy()
+        boxes = res.boxes.xyxy.cpu().numpy()
+        tids = res.boxes.id.cpu().numpy()
 
-#         print(f"⏱ Frame {frame_idx}: Processing frame...")
+        print(f"⏱ Frame {frame_idx}: Processing frame...")
 
-#         # Track posture and classify (use your logic)
-#         centroid, posture = {}, {}
-#         for i, kp in enumerate(kps):
-#             tid = int(tids[i])
-#             x0, y0, x1, y1 = boxes[i]
-#             centroid[tid] = Point((x0 + x1) / 2, (y0 + y1) / 2)
-#             ang = {k: np.nan for k in ('l_knee', 'r_knee', 'l_hip', 'r_hip')}
-#             print(f"👤 Tracking person {tid}, keypoints: {kp}")
+        # Track posture and classify (use your logic)
+        centroid, posture = {}, {}
+        for i, kp in enumerate(kps):
+            tid = int(tids[i])
+            x0, y0, x1, y1 = boxes[i]
+            centroid[tid] = Point((x0 + x1) / 2, (y0 + y1) / 2)
+            ang = {k: np.nan for k in ('l_knee', 'r_knee', 'l_hip', 'r_hip')}
+            print(f"👤 Tracking person {tid}, keypoints: {kp}")
 
-#             # Compute angles if the keypoints for legs are available
-#             if kconf[i][11] > .3 and kconf[i][13] > .3 and kconf[i][15] > .3:
-#                 ang['l_knee'] = compute_angle(kp[11], kp[13], kp[15])
-#                 print(f"    Left knee angle: {ang['l_knee']}")
-#             if kconf[i][12] > .3 and kconf[i][14] > .3 and kconf[i][16] > .3:
-#                 ang['r_knee'] = compute_angle(kp[12], kp[14], kp[16])
-#                 print(f"    Right knee angle: {ang['r_knee']}")
-#             if kconf[i][5] > .3 and kconf[i][11] > .3 and kconf[i][13] > .3:
-#                 ang['l_hip'] = compute_angle(kp[5], kp[11], kp[13])
-#             if kconf[i][6] > .3 and kconf[i][12] > .3 and kconf[i][14] > .3:
-#                 ang['r_hip'] = compute_angle(kp[6], kp[12], kp[14])
+            # Compute angles if the keypoints for legs are available
+            if kconf[i][11] > .3 and kconf[i][13] > .3 and kconf[i][15] > .3:
+                ang['l_knee'] = compute_angle(kp[11], kp[13], kp[15])
+                print(f"    Left knee angle: {ang['l_knee']}")
+            if kconf[i][12] > .3 and kconf[i][14] > .3 and kconf[i][16] > .3:
+                ang['r_knee'] = compute_angle(kp[12], kp[14], kp[16])
+                print(f"    Right knee angle: {ang['r_knee']}")
+            if kconf[i][5] > .3 and kconf[i][11] > .3 and kconf[i][13] > .3:
+                ang['l_hip'] = compute_angle(kp[5], kp[11], kp[13])
+            if kconf[i][6] > .3 and kconf[i][12] > .3 and kconf[i][14] > .3:
+                ang['r_hip'] = compute_angle(kp[6], kp[12], kp[14])
             
-#             posture[tid] = classify_posture(kp, kconf[i], ang, img_h=h)
-#             print(f"    Person {tid} posture: {posture[tid]}")
+            posture[tid] = classify_posture(kp, kconf[i], ang, img_h=h)
+            print(f"    Person {tid} posture: {posture[tid]}")
 
-#         # Track seat occupancy based on posture and update stats
-#         for seat, poly in seat_poly.items():
-#             owner = owner_tid[seat]
-#             ids_in = [tid for tid, pt in centroid.items() if poly.contains(pt)]
-#             print(f"🪑 Checking seat {seat}, owner: {owner}, ids_in: {ids_in}")
+        # Track seat occupancy based on posture and update stats
+        for seat, poly in seat_poly.items():
+            owner = owner_tid[seat]
+            ids_in = [tid for tid, pt in centroid.items() if poly.contains(pt)]
+            print(f"🪑 Checking seat {seat}, owner: {owner}, ids_in: {ids_in}")
 
-#             if owner is None and ids_in:
-#                 owner = owner_tid[seat] = ids_in[0]
-#                 owner_miss[seat] = 0
-#                 print(f"    Seat {seat} occupied by person {owner}.")
-#             elif owner is not None:
-#                 if owner in ids_in:
-#                     stats[seat]['dwell'] += 1 / fps
-#                     stats[seat][posture[owner].lower()] += 1 / fps
-#                     owner_miss[seat] = 0
-#                     print(f"    Seat {seat} still occupied by person {owner}, updating stats.")
-#                 else:
-#                     owner_miss[seat] += 1
-#                     if owner_miss[seat] > 30:
-#                         owner_tid[seat] = None
-#                         owner_miss[seat] = 0
-#                         print(f"    Seat {seat} is now unoccupied.")
-
-#         # Draw the seat occupancy and posture
-#         print(f"✏️ Drawing seat occupancy and posture on frame {frame_idx}...")
-#         draw_seats(frame, seat_poly, stats)
-
-#         writer.write(frame)
-#         if show:
-#             cv2.imshow("Posture Tracker", frame)
-#             if cv2.waitKey(1) & 0xFF == ord('q'):
-#                 break
-
-#         # Save stats periodically every 100 frames
-#         if frame_idx % 100 == 0:
-#             with open(stats_file, 'w') as f:
-#                 json.dump(stats, f, indent=2)
-#             print(f"📊 Stats saved to {stats_file} at frame {frame_idx}.")
-
-#     writer.release()
-#     if show:
-#         cv2.destroyAllWindows()
-
-#     print(f"✅ Video processing complete. Stats saved in {stats_file}")
-#     return stats
-
-# Use lightweight pose model for performance
-pose_model = YOLO("yolov8n-pose.pt")  # Use yolov8n-pose.pt for speed
-
-# Replace this with your actual seat coordinates
-# SEAT_COORDINATES = {
-#     "seat_1": [(100, 100), (200, 100), (200, 150), (100, 150)],
-#     "seat_2": [(250, 100), (350, 100), (350, 150), (250, 150)],
-# }
-
-SEAT_COORDINATES = {
-        'seat_1': [(343.2,368.9),(507.3,275.4),(431.7,157.4),(235.5,222.8)],
-        'seat_2': [(348.3,374.1),(517.6,290.8),(621.4,438.2),(448.3,533.1)],
-        'seat_3': [(463.7,563.8),(670.1,501.0),(804.1,719.0),(522.7,719.0)],
-        'seat_4': [(818.8,575.4),(1025.3,429.2),(1250.9,594.6),
-                   (1137.2,719.0),(843.2,719.0),(770.1,617.7)],
-        'seat_5': [(665.0,353.6),(838.1,238.2),(1011.2,427.9),(811.2,574.1)],
-    }
-
-seat_poly = {n: Polygon(pts) for n, pts in SEAT_COORDINATES.items()}
-stats = {s: defaultdict(float) for s in SEAT_COORDINATES}
-owner_tid = {s: None for s in SEAT_COORDINATES}
-owner_miss = {s: 0 for s in SEAT_COORDINATES}
-
-# Lightweight function to process posture on a single frame
-def process_posture_and_occupancy_frame(model, frame, seat_poly, stats, owner_tid, owner_miss, fps):
-    results = model.predict(frame, stream=False, verbose=False)[0]
-    if not hasattr(results, "keypoints") or results.keypoints is None:
-        return frame
-
-    kps = results.keypoints.xy.cpu().numpy()
-    kconf = results.keypoints.conf.cpu().numpy()
-    boxes = results.boxes.xyxy.cpu().numpy()
-    tids = np.arange(len(kps))
-
-    centroid, posture = {}, {}
-    h = frame.shape[0]
-
-    for i, kp in enumerate(kps):
-        tid = int(tids[i])
-        x0, y0, x1, y1 = boxes[i]
-        centroid[tid] = Point((x0 + x1) / 2, (y0 + y1) / 2)
-        ang = {k: np.nan for k in ('l_knee', 'r_knee', 'l_hip', 'r_hip')}
-
-        if kconf[i][11] > .3 and kconf[i][13] > .3 and kconf[i][15] > .3:
-            ang['l_knee'] = compute_angle(kp[11], kp[13], kp[15])
-        if kconf[i][12] > .3 and kconf[i][14] > .3 and kconf[i][16] > .3:
-            ang['r_knee'] = compute_angle(kp[12], kp[14], kp[16])
-        if kconf[i][5] > .3 and kconf[i][11] > .3 and kconf[i][13] > .3:
-            ang['l_hip'] = compute_angle(kp[5], kp[11], kp[13])
-        if kconf[i][6] > .3 and kconf[i][12] > .3 and kconf[i][14] > .3:
-            ang['r_hip'] = compute_angle(kp[6], kp[12], kp[14])
-
-        posture[tid] = classify_posture(kp, kconf[i], ang, img_h=h)
-
-    for seat, poly in seat_poly.items():
-        owner = owner_tid[seat]
-        ids_in = [tid for tid, pt in centroid.items() if poly.contains(pt)]
-
-        if owner is None and ids_in:
-            owner_tid[seat] = ids_in[0]
-            owner_miss[seat] = 0
-        elif owner is not None:
-            if owner in ids_in:
-                stats[seat]['dwell'] += 1 / fps
-                stats[seat][posture[owner].lower()] += 1 / fps
+            if owner is None and ids_in:
+                owner = owner_tid[seat] = ids_in[0]
                 owner_miss[seat] = 0
-            else:
-                owner_miss[seat] += 1
-                if owner_miss[seat] > 30:
-                    owner_tid[seat] = None
+                print(f"    Seat {seat} occupied by person {owner}.")
+            elif owner is not None:
+                if owner in ids_in:
+                    stats[seat]['dwell'] += 1 / fps
+                    stats[seat][posture[owner].lower()] += 1 / fps
                     owner_miss[seat] = 0
+                    print(f"    Seat {seat} still occupied by person {owner}, updating stats.")
+                else:
+                    owner_miss[seat] += 1
+                    if owner_miss[seat] > 30:
+                        owner_tid[seat] = None
+                        owner_miss[seat] = 0
+                        print(f"    Seat {seat} is now unoccupied.")
 
-    draw_seats(frame, seat_poly, stats)
-    return frame
+        # Draw the seat occupancy and posture
+        print(f"✏️ Drawing seat occupancy and posture on frame {frame_idx}...")
+        draw_seats(frame, seat_poly, stats)
 
-# In your WebSocket `stream_posture_and_occupancy`, update process_frame_callback:
-def track_posture_and_occupancy(frame, boxes):
-    fps = 30  # ideally measured dynamically
-    start_time = time.time()
-    process_posture_and_occupancy_frame(pose_model, frame, seat_poly, stats, owner_tid, owner_miss, fps)
-    elapsed_time = time.time() - start_time
-    sleep_time = max(0, (1 / fps) - elapsed_time)
-    if sleep_time > 0:
-        time.sleep(sleep_time)
+        writer.write(frame)
+        if show:
+            cv2.imshow("Posture Tracker", frame)
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
+
+        # Save stats periodically every 100 frames
+        if frame_idx % 100 == 0:
+            with open(stats_file, 'w') as f:
+                json.dump(stats, f, indent=2)
+            print(f"📊 Stats saved to {stats_file} at frame {frame_idx}.")
+
+    writer.release()
+    if show:
+        cv2.destroyAllWindows()
+
+    print(f"✅ Video processing complete. Stats saved in {stats_file}")
+    return stats
+
 
 def compute_angle(a, b, c):
     a, b, c = map(np.array, (a, b, c))
@@ -409,7 +332,10 @@ def compute_angle(a, b, c):
     cos = np.dot(ba, bc) / d
     return np.degrees(np.arccos(np.clip(cos, -1.0, 1.0)))
 
+
 def classify_posture(kp, conf, ang, img_h=None, min_visible=8):
+    # Logic to classify posture
+    # Checks the knee and hip angles to classify as Sitting, Standing, or Uncertain
     legs_ok = all(conf[i] > .3 for i in (11, 12, 13, 14, 15, 16))
     if legs_ok:
         knee = np.nanmean([ang['l_knee'], ang['r_knee']])
@@ -426,6 +352,7 @@ def classify_posture(kp, conf, ang, img_h=None, min_visible=8):
         return 'Sitting' if 0.5 * (s_y + h_y) > img_h * 0.55 else 'Standing'
 
     return 'Uncertain'
+
 
 def draw_seats(img, poly_map, stats):
     """
@@ -489,29 +416,29 @@ def execute_user_ai_models(user_id, camera_id, frame, rtsp_url=None, save_to_jso
             function_to_execute = function_map[function_name]
             print(f"Executing {function_name} for user {user_id} and camera {camera_id}.")
 
-            # if function_name == "track_posture_and_occupancy":
-            #     if not rtsp_url:
-            #         print("❌ RTSP URL is required for posture tracking.")
-            #         continue
-            #     try:
-            #         result = function_to_execute(
-            #             model="yolo11m-pose.pt",
-            #             source=rtsp_url,
-            #             output_path="output_video.mp4",
-            #             stats_file='stats.json',
-            #             show=True
-            #         )
-            #         if save_to_json:
-            #             save_sample_data_to_json(user_id, camera_id, result)
-            #     except Exception as e:
-            #         print(f"❌ Error during posture tracking execution: {e}")
-            # else:
-            try:
-                boxes = []  # Replace with real boxes if needed
-                processed_frame = function_to_execute(frame, boxes)
-                print(f"Processed frame using {function_name}.")
-            except Exception as e:
-                print(f"❌ Error during {function_name} execution: {e}")
+            if function_name == "track_posture_and_occupancy":
+                if not rtsp_url:
+                    print("❌ RTSP URL is required for posture tracking.")
+                    continue
+                try:
+                    result = function_to_execute(
+                        model="yolo11m-pose.pt",
+                        source=rtsp_url,
+                        output_path="output_video.mp4",
+                        stats_file='stats.json',
+                        show=True
+                    )
+                    if save_to_json:
+                        save_sample_data_to_json(user_id, camera_id, result)
+                except Exception as e:
+                    print(f"❌ Error during posture tracking execution: {e}")
+            else:
+                try:
+                    boxes = []  # Replace with real boxes if needed
+                    processed_frame = function_to_execute(frame, boxes)
+                    print(f"Processed frame using {function_name}.")
+                except Exception as e:
+                    print(f"❌ Error during {function_name} execution: {e}")
         else:
             print(f"❌ No function found for AiModel {function_name}.")
 
