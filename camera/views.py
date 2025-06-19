@@ -36,7 +36,7 @@ class LiveWallAPIView(APIView):
                 "camera_name": cam.name,
                 "location": cam.location or "",
                 # Include user_id and camera_id in the ws_stream_url
-                "ws_stream_url": f"{base_url}/ws/stream/{user.id}/{cam.id}/{mode}"
+                "ws_stream_url": f"{base_url}/ws/stream/{user.id}/{cam.id}/{mode}/"
             }
 
             # Add to full camera list
