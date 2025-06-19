@@ -319,10 +319,19 @@ from collections import defaultdict
 pose_model = YOLO("yolov8n-pose.pt")  # Use yolov8n-pose.pt for speed
 
 # Replace this with your actual seat coordinates
+# SEAT_COORDINATES = {
+#     "seat_1": [(100, 100), (200, 100), (200, 150), (100, 150)],
+#     "seat_2": [(250, 100), (350, 100), (350, 150), (250, 150)],
+# }
+
 SEAT_COORDINATES = {
-    "seat_1": [(100, 100), (200, 100), (200, 150), (100, 150)],
-    "seat_2": [(250, 100), (350, 100), (350, 150), (250, 150)],
-}
+        'seat_1': [(343.2,368.9),(507.3,275.4),(431.7,157.4),(235.5,222.8)],
+        'seat_2': [(348.3,374.1),(517.6,290.8),(621.4,438.2),(448.3,533.1)],
+        'seat_3': [(463.7,563.8),(670.1,501.0),(804.1,719.0),(522.7,719.0)],
+        'seat_4': [(818.8,575.4),(1025.3,429.2),(1250.9,594.6),
+                   (1137.2,719.0),(843.2,719.0),(770.1,617.7)],
+        'seat_5': [(665.0,353.6),(838.1,238.2),(1011.2,427.9),(811.2,574.1)],
+    }
 
 seat_poly = {n: Polygon(pts) for n, pts in SEAT_COORDINATES.items()}
 stats = {s: defaultdict(float) for s in SEAT_COORDINATES}
