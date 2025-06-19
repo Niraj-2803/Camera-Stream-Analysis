@@ -408,7 +408,7 @@ def execute_user_ai_models(user_id, camera_id, frame, save_to_json=False):
             "pixelate_people": pixelate_people,
             "count_people": count_people,
             "generate_people_heatmap": generate_people_heatmap,
-            "track_posture": track_posture_and_occupancy  # New function for posture tracking
+            "track_posture_and_occupancy": track_posture_and_occupancy  # New function for posture tracking
         }
 
         # Check if the function exists in the map
@@ -417,7 +417,7 @@ def execute_user_ai_models(user_id, camera_id, frame, save_to_json=False):
             print(f"Executing {function_name} for user {user_id} and camera {camera_id}.")
             
             # If it's the 'track_posture' function, pass the correct arguments
-            if function_name == "track_posture":
+            if function_name == "track_posture_and_occupancy":
                 try:
                     result = function_to_execute(
                         model="yolo11m-pose.pt",  # You can replace with the appropriate model path

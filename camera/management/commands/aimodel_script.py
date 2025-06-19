@@ -8,7 +8,7 @@ class Command(BaseCommand):
     def handle(self, *args, **kwargs):
         app_stack_data = [
             {
-                "title": "Track Posture & Occupancy",
+                "title": "Track Posture and Occupancy",
                 "icon": "/icons/posture.png",
                 "version": "3.2",
                 "status": "Active",
