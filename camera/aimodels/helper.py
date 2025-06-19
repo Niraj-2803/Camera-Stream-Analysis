@@ -316,7 +316,7 @@ from collections import defaultdict
 #     return stats
 
 # Use lightweight pose model for performance
-pose_model = YOLO("yolo11n-pose.pt")  # Use yolov8n-pose.pt for speed
+pose_model = YOLO("yolov8n-pose.pt")  # Use yolov8n-pose.pt for speed
 
 # Replace this with your actual seat coordinates
 # SEAT_COORDINATES = {
