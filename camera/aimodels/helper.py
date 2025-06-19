@@ -315,22 +315,31 @@ from collections import defaultdict
 #     print(f"✅ Video processing complete. Stats saved in {stats_file}")
 #     return stats
 
+
+# Use lightweight pose model for performance
+pose_model = YOLO("yolov8n-pose.pt")  # Use yolov8n-pose.pt for speed
+
 # Replace this with your actual seat coordinates
 SEAT_COORDINATES = {
     "seat_1": [(100, 100), (200, 100), (200, 150), (100, 150)],
     "seat_2": [(250, 100), (350, 100), (350, 150), (250, 150)],
 }
 
+seat_poly = {n: Polygon(pts) for n, pts in SEAT_COORDINATES.items()}
+stats = {s: defaultdict(float) for s in SEAT_COORDINATES}
+owner_tid = {s: None for s in SEAT_COORDINATES}
+owner_miss = {s: 0 for s in SEAT_COORDINATES}
+
 # Lightweight function to process posture on a single frame
 def process_posture_and_occupancy_frame(model, frame, seat_poly, stats, owner_tid, owner_miss, fps):
     results = model.predict(frame, stream=False, verbose=False)[0]
-    if results.keypoints is None:
+    if not hasattr(results, "keypoints") or results.keypoints is None:
         return frame
 
     kps = results.keypoints.xy.cpu().numpy()
     kconf = results.keypoints.conf.cpu().numpy()
     boxes = results.boxes.xyxy.cpu().numpy()
-    tids = np.arange(len(kps))  # if no track ID, just enumerate
+    tids = np.arange(len(kps))
 
     centroid, posture = {}, {}
     h = frame.shape[0]
@@ -373,18 +382,15 @@ def process_posture_and_occupancy_frame(model, frame, seat_poly, stats, owner_ti
     draw_seats(frame, seat_poly, stats)
     return frame
 
-# Call this from your WebSocket process_frame_callback
-pose_model = YOLO("yolo11m-pose.pt")
-seat_poly = {n: Polygon(pts) for n, pts in SEAT_COORDINATES.items()}
-stats = {s: defaultdict(float) for s in SEAT_COORDINATES}
-owner_tid = {s: None for s in SEAT_COORDINATES}
-owner_miss = {s: 0 for s in SEAT_COORDINATES}
-
 # In your WebSocket `stream_posture_and_occupancy`, update process_frame_callback:
-def track_posture_and_occupancy(frame,boxes):
-    fps = 30  # or detect dynamically from camera
+def track_posture_and_occupancy(frame, boxes):
+    fps = 30  # ideally measured dynamically
+    start_time = cv2.getTickCount()
     process_posture_and_occupancy_frame(pose_model, frame, seat_poly, stats, owner_tid, owner_miss, fps)
-
+    end_time = cv2.getTickCount()
+    elapsed_time = (end_time - start_time) / cv2.getTickFrequency()
+    if elapsed_time < 1 / fps:
+        time.sleep((1 / fps) - elapsed_time)
 
 def compute_angle(a, b, c):
     a, b, c = map(np.array, (a, b, c))
@@ -395,10 +401,7 @@ def compute_angle(a, b, c):
     cos = np.dot(ba, bc) / d
     return np.degrees(np.arccos(np.clip(cos, -1.0, 1.0)))
 
-
 def classify_posture(kp, conf, ang, img_h=None, min_visible=8):
-    # Logic to classify posture
-    # Checks the knee and hip angles to classify as Sitting, Standing, or Uncertain
     legs_ok = all(conf[i] > .3 for i in (11, 12, 13, 14, 15, 16))
     if legs_ok:
         knee = np.nanmean([ang['l_knee'], ang['r_knee']])
