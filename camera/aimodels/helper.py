@@ -315,7 +315,6 @@ from collections import defaultdict
 #     print(f"✅ Video processing complete. Stats saved in {stats_file}")
 #     return stats
 
-
 # Use lightweight pose model for performance
 pose_model = YOLO("yolov8n-pose.pt")  # Use yolov8n-pose.pt for speed
 
@@ -385,12 +384,12 @@ def process_posture_and_occupancy_frame(model, frame, seat_poly, stats, owner_ti
 # In your WebSocket `stream_posture_and_occupancy`, update process_frame_callback:
 def track_posture_and_occupancy(frame, boxes):
     fps = 30  # ideally measured dynamically
-    start_time = cv2.getTickCount()
+    start_time = time.time()
     process_posture_and_occupancy_frame(pose_model, frame, seat_poly, stats, owner_tid, owner_miss, fps)
-    end_time = cv2.getTickCount()
-    elapsed_time = (end_time - start_time) / cv2.getTickFrequency()
-    if elapsed_time < 1 / fps:
-        time.sleep((1 / fps) - elapsed_time)
+    elapsed_time = time.time() - start_time
+    sleep_time = max(0, (1 / fps) - elapsed_time)
+    if sleep_time > 0:
+        time.sleep(sleep_time)
 
 def compute_angle(a, b, c):
     a, b, c = map(np.array, (a, b, c))
@@ -418,7 +417,6 @@ def classify_posture(kp, conf, ang, img_h=None, min_visible=8):
         return 'Sitting' if 0.5 * (s_y + h_y) > img_h * 0.55 else 'Standing'
 
     return 'Uncertain'
-
 
 def draw_seats(img, poly_map, stats):
     """
