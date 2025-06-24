@@ -39,4 +39,4 @@ class UserAiModel(BaseModel):
     is_active = models.BooleanField(default=False)
 
     class Meta:
-        unique_together = ('user', 'aimodel')
+        unique_together = ('user', 'aimodel', 'camera')

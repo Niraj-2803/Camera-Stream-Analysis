@@ -269,19 +269,35 @@ class UserAiModelView(APIView):
             return Response({"detail": "Invalid user or camera ID."}, status=404)
 
         created_items = []
+        duplicate_items = []
+
         for model_id in ai_model_ids:
             try:
                 aimodel = AiModel.objects.get(id=model_id)
-                obj, created = UserAiModel.objects.get_or_create(
-                    user=user,
-                    aimodel=aimodel,
-                    camera=camera,
-                    defaults={"is_active": True}
-                )
-                if created:
-                    created_items.append(obj.id)
             except AiModel.DoesNotExist:
                 continue
+
+            # Check if the combination already exists
+            if UserAiModel.objects.filter(user=user, aimodel=aimodel, camera=camera).exists():
+                duplicate_items.append({"user_id": user.id, "aimodel_id": aimodel.id, "camera_id": camera.id})
+                continue
+
+            # Create new association
+            obj = UserAiModel.objects.create(
+                user=user,
+                aimodel=aimodel,
+                camera=camera,
+                is_active=True
+            )
+            created_items.append(obj.id)
+
+        # Return error if duplicates found
+        if duplicate_items:
+            return Response({
+                "detail": "Some entries already exist.",
+                "duplicates": duplicate_items,
+                "created_ids": created_items
+            }, status=400 if not created_items else 207)  # 207: Multi-Status
 
         return Response({"created_ids": created_items}, status=201)
 
