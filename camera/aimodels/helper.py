@@ -28,7 +28,8 @@ from camera.models import UserAiModel
 
 #     return frame
 
-def blur_faces(frame, boxes, results, blur_size=35):
+
+def blur_faces(frame, results, blur_size=35):
 
     result = results[0]  # single-image inference
 
