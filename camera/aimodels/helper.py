@@ -29,38 +29,55 @@ from camera.models import UserAiModel
 #     return frame
 
 
+import logging
+import cv2
+import numpy as np
+
+# Setup logger
+logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
+logger = logging.getLogger(__name__)
+
+
 def blur_faces(frame, results, blur_size=35):
+    logger.info("Starting face blurring process.")
 
     result = results[0]  # single-image inference
 
-    # (n_people,17,2) and (n_people,17)
-    kpts  = result.keypoints.xy.cpu().numpy()
-    confs = result.keypoints.conf.cpu().numpy()
+    try:
+        kpts  = result.keypoints.xy.cpu().numpy()
+        confs = result.keypoints.conf.cpu().numpy()
+    except Exception as e:
+        logger.error("Error accessing keypoints or confidence scores: %s", e)
+        return frame
 
-    # make sure blur kernel is odd
     k = blur_size if blur_size % 2 == 1 else blur_size + 1
+    logger.debug(f"Using blur kernel size: {k}")
 
     h_img, w_img = frame.shape[:2]
-    for person_kpts, person_conf in zip(kpts, confs):
-        head_pts  = person_kpts[[0,1,2,3,4], :]
-        head_conf = person_conf[[0,1,2,3,4]]
+    logger.info(f"Image dimensions: width={w_img}, height={h_img}")
+    
+    num_faces_blurred = 0
+
+    for idx, (person_kpts, person_conf) in enumerate(zip(kpts, confs)):
+        head_pts  = person_kpts[[0, 1, 2, 3, 4], :]
+        head_conf = person_conf[[0, 1, 2, 3, 4]]
         valid = head_conf > 0.7
         pts = head_pts[valid]
+
         if pts.shape[0] < 2:
+            logger.debug(f"Skipping person {idx}: insufficient keypoints with confidence > 0.7")
             continue
 
-        xs, ys = pts[:,0], pts[:,1]
+        xs, ys = pts[:, 0], pts[:, 1]
         x1, x2 = int(xs.min()), int(xs.max())
         y1, y2 = int(ys.min()), int(ys.max())
 
-        # pad
         pw = int((x2 - x1) * 0.3)
         ph = int((y2 - y1) * 0.3)
         x1_p, y1_p = max(0, x1 - pw), max(0, y1 - ph)
         x2_p = min(w_img, x2 + pw)
         y2_p = min(h_img, y2 + ph)
 
-        # square-ify
         w_box, h_box = x2_p - x1_p, y2_p - y1_p
         side = max(w_box, h_box)
         x2_s = min(w_img, x1_p + side)
@@ -69,7 +86,12 @@ def blur_faces(frame, results, blur_size=35):
         roi = frame[y1_p:y2_s, x1_p:x2_s]
         if roi.size > 0:
             frame[y1_p:y2_s, x1_p:x2_s] = cv2.blur(roi, (k, k))
+            logger.info(f"Blurred face for person {idx} in region: ({x1_p},{y1_p}) to ({x2_s},{y2_s})")
+            num_faces_blurred += 1
+        else:
+            logger.warning(f"Empty ROI for person {idx}; skipping.")
 
+    logger.info(f"Finished processing. Total faces blurred: {num_faces_blurred}")
     return frame
 
 
@@ -138,6 +160,7 @@ def count_people(model_path, width, region_points=None):
         return results.plot_im
 
     return counter_fn
+
 
 # 🧠 Use Case 4: Generate heatmap for people only (class 0)
 def generate_people_heatmap(model_path, colormap=cv2.COLORMAP_PARULA):
