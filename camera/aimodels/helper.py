@@ -4,6 +4,14 @@ from ultralytics import YOLO
 from ultralytics import solutions
 import numpy as np
 import os
+import cv2
+import numpy as np
+from shapely.geometry import Polygon, Point
+from ultralytics import YOLO
+import json
+import time
+from collections import defaultdict
+
 
 from camera.models import UserAiModel
 
@@ -38,61 +46,61 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger(__name__)
 
 
-def blur_faces(frame, results, blur_size=35):
-    logger.info("Starting face blurring process.")
+# def blur_faces(frame, results, blur_size=35):
+#     logger.info("Starting face blurring process.")
 
-    result = results[0]  # single-image inference
+#     result = results[0]  # single-image inference
 
-    try:
-        kpts  = result.keypoints.xy.cpu().numpy()
-        confs = result.keypoints.conf.cpu().numpy()
-    except Exception as e:
-        logger.error("Error accessing keypoints or confidence scores: %s", e)
-        return frame
+#     try:
+#         kpts  = result.keypoints.xy.cpu().numpy()
+#         confs = result.keypoints.conf.cpu().numpy()
+#     except Exception as e:
+#         logger.error("Error accessing keypoints or confidence scores: %s", e)
+#         return frame
 
-    k = blur_size if blur_size % 2 == 1 else blur_size + 1
-    logger.debug(f"Using blur kernel size: {k}")
+#     k = blur_size if blur_size % 2 == 1 else blur_size + 1
+#     logger.debug(f"Using blur kernel size: {k}")
 
-    h_img, w_img = frame.shape[:2]
-    logger.info(f"Image dimensions: width={w_img}, height={h_img}")
+#     h_img, w_img = frame.shape[:2]
+#     logger.info(f"Image dimensions: width={w_img}, height={h_img}")
     
-    num_faces_blurred = 0
+#     num_faces_blurred = 0
 
-    for idx, (person_kpts, person_conf) in enumerate(zip(kpts, confs)):
-        head_pts  = person_kpts[[0, 1, 2, 3, 4], :]
-        head_conf = person_conf[[0, 1, 2, 3, 4]]
-        valid = head_conf > 0.7
-        pts = head_pts[valid]
+#     for idx, (person_kpts, person_conf) in enumerate(zip(kpts, confs)):
+#         head_pts  = person_kpts[[0, 1, 2, 3, 4], :]
+#         head_conf = person_conf[[0, 1, 2, 3, 4]]
+#         valid = head_conf > 0.7
+#         pts = head_pts[valid]
 
-        if pts.shape[0] < 2:
-            logger.debug(f"Skipping person {idx}: insufficient keypoints with confidence > 0.7")
-            continue
+#         if pts.shape[0] < 2:
+#             logger.debug(f"Skipping person {idx}: insufficient keypoints with confidence > 0.7")
+#             continue
 
-        xs, ys = pts[:, 0], pts[:, 1]
-        x1, x2 = int(xs.min()), int(xs.max())
-        y1, y2 = int(ys.min()), int(ys.max())
+#         xs, ys = pts[:, 0], pts[:, 1]
+#         x1, x2 = int(xs.min()), int(xs.max())
+#         y1, y2 = int(ys.min()), int(ys.max())
 
-        pw = int((x2 - x1) * 0.3)
-        ph = int((y2 - y1) * 0.3)
-        x1_p, y1_p = max(0, x1 - pw), max(0, y1 - ph)
-        x2_p = min(w_img, x2 + pw)
-        y2_p = min(h_img, y2 + ph)
+#         pw = int((x2 - x1) * 0.3)
+#         ph = int((y2 - y1) * 0.3)
+#         x1_p, y1_p = max(0, x1 - pw), max(0, y1 - ph)
+#         x2_p = min(w_img, x2 + pw)
+#         y2_p = min(h_img, y2 + ph)
 
-        w_box, h_box = x2_p - x1_p, y2_p - y1_p
-        side = max(w_box, h_box)
-        x2_s = min(w_img, x1_p + side)
-        y2_s = min(h_img, y1_p + side)
+#         w_box, h_box = x2_p - x1_p, y2_p - y1_p
+#         side = max(w_box, h_box)
+#         x2_s = min(w_img, x1_p + side)
+#         y2_s = min(h_img, y1_p + side)
 
-        roi = frame[y1_p:y2_s, x1_p:x2_s]
-        if roi.size > 0:
-            frame[y1_p:y2_s, x1_p:x2_s] = cv2.blur(roi, (k, k))
-            logger.info(f"Blurred face for person {idx} in region: ({x1_p},{y1_p}) to ({x2_s},{y2_s})")
-            num_faces_blurred += 1
-        else:
-            logger.warning(f"Empty ROI for person {idx}; skipping.")
+#         roi = frame[y1_p:y2_s, x1_p:x2_s]
+#         if roi.size > 0:
+#             frame[y1_p:y2_s, x1_p:x2_s] = cv2.blur(roi, (k, k))
+#             logger.info(f"Blurred face for person {idx} in region: ({x1_p},{y1_p}) to ({x2_s},{y2_s})")
+#             num_faces_blurred += 1
+#         else:
+#             logger.warning(f"Empty ROI for person {idx}; skipping.")
 
-    logger.info(f"Finished processing. Total faces blurred: {num_faces_blurred}")
-    return frame
+#     logger.info(f"Finished processing. Total faces blurred: {num_faces_blurred}")
+#     return frame
 
 
 # 🧠 Use Case 2: Pixelate full person area (for privacy or censorship)
@@ -136,30 +144,126 @@ def count_cars(model_path, width, height, region_points=None):
     return counter_fn
 
 
-# 🧠 Use Case 3b: Count people only
-def count_people(model_path, width, region_points=None):
-    print("count people execute")
-    height =1
-    if region_points is None:
-        region_points = [
-            (20, int(height * 0.5)),
-            (width - 20, int(height * 0.5)),
-            (width - 20, int(height * 0.45)),
-            (20, int(height * 0.45))
-        ]
+def blur_faces(frame, results):
+    logger.info("Starting face blurring process.")
 
-    counter = solutions.ObjectCounter(
-        show=False,
-        region=region_points,
-        model=model_path,
-        classes=[0]  # Only people (class 0)
-    )
+    result = results[0]  # single-image inference
 
-    def counter_fn(frame):
-        results = counter(frame)
-        return results.plot_im
+    try:
+        kpts  = result.keypoints.xy.cpu().numpy()
+        confs = result.keypoints.conf.cpu().numpy()
+    except Exception as e:
+        logger.error("Error accessing keypoints or confidence scores: %s", e)
+        return frame
 
-    return counter_fn
+    h_img, w_img = frame.shape[:2]
+    logger.info(f"Image dimensions: width={w_img}, height={h_img}")
+    
+    num_faces_blurred = 0
+
+    for idx, (person_kpts, person_conf) in enumerate(zip(kpts, confs)):
+        head_pts  = person_kpts[[0, 1, 2, 3, 4], :]
+        head_conf = person_conf[[0, 1, 2, 3, 4]]
+        valid = head_conf > 0.7
+        pts = head_pts[valid]
+
+        if pts.shape[0] < 2:
+            logger.debug(f"Skipping person {idx}: insufficient keypoints with confidence > 0.7")
+            continue
+
+        xs, ys = pts[:, 0], pts[:, 1]
+        x1, x2 = int(xs.min()), int(xs.max())
+        y1, y2 = int(ys.min()), int(ys.max())
+
+        pw = int((x2 - x1) * 0.3)
+        ph = int((y2 - y1) * 0.3)
+        x1_p, y1_p = max(0, x1 - pw), max(0, y1 - ph)
+        x2_p = min(w_img, x2 + pw)
+        y2_p = min(h_img, y2 + ph)
+
+        w_box, h_box = x2_p - x1_p, y2_p - y1_p
+        side = max(w_box, h_box)
+        x2_s = min(w_img, x1_p + side)
+        y2_s = min(h_img, y1_p + side)
+
+        roi = frame[y1_p:y2_s, x1_p:x2_s]
+        if roi.size > 0:
+            BLUR_FACTOR = 0.3  
+            raw_k = side * BLUR_FACTOR
+            # ensure odd integer ≥1
+            k = max(1, int(raw_k) // 2 * 2 + 1)
+
+            frame[y1_p:y2_s, x1_p:x2_s] = cv2.blur(roi, (k, k))
+            logger.info(f"Blurred face for person {idx} in region: ({x1_p},{y1_p}) to ({x2_s},{y2_s})")
+            num_faces_blurred += 1
+        else:
+            logger.warning(f"Empty ROI for person {idx}; skipping.")
+
+    logger.info(f"Finished processing. Total faces blurred: {num_faces_blurred}")
+    return frame
+
+
+import logging
+import cv2
+import numpy as np
+import time
+
+# Setup logger if not already configured
+logger = logging.getLogger(__name__)
+if not logger.hasHandlers():
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
+
+# Keep track of the last time count was logged
+last_count_log_time = 0  # global or pass into function if needed
+
+def count_people(frame, results):
+    """
+    Draws bounding boxes around each detected person, labels them 1…N (left to right),
+    and logs count every 60 seconds.
+    Returns: (annotated_frame, count)
+    """
+    global last_count_log_time
+
+    if not results or len(results) == 0:
+        logger.warning("No results returned by model.")
+        return frame, 0
+
+    result = results[0]
+
+    try:
+        boxes = result.boxes.xyxy.cpu().numpy()
+    except Exception as e:
+        logger.error("❌ Error accessing boxes: %s", e)
+        return frame, 0
+
+    if boxes.size == 0:
+        logger.info("No people detected in frame.")
+        cv2.putText(frame, "Count: 0", (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
+        return frame, 0
+
+    # sort boxes left to right
+    order = np.argsort(boxes[:, 0])
+    count = len(order)
+    logger.debug(f"{count} people detected.")
+
+    for idx, i in enumerate(order, start=1):
+        x1, y1, x2, y2 = boxes[i].astype(int)
+        cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
+        cv2.putText(frame, str(idx), (x1, y1 - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 0, 0), 2)
+
+    # Add total count to frame
+    cv2.putText(frame, f"Count: {count}", (10, 30),
+                cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
+
+    # Print count every 60 seconds
+    current_time = time.time()
+    if current_time - last_count_log_time >= 60:
+        logger.info(f"👥 People Count: {count}")
+        last_count_log_time = current_time
+
+    return frame
 
 
 # 🧠 Use Case 4: Generate heatmap for people only (class 0)
@@ -261,13 +365,6 @@ def process_video_stream(source, output_path, model_path, usecase="blur_faces", 
 
 # helpers.py
 
-import cv2
-import numpy as np
-from shapely.geometry import Polygon, Point
-from ultralytics import YOLO
-import json
-import time
-from collections import defaultdict
 
 
 # Function to process posture and occupancy tracking
@@ -529,6 +626,8 @@ def draw_label(img, text, org, font=cv2.FONT_HERSHEY_SIMPLEX,
 
     cv2.rectangle(img, (x - pad, y - h - pad), (x + w + pad, y + base + pad), bg_color, -1)
     cv2.putText(img, text, org, font, font_scale, txt_color, thickness)
+
+
 
 
 import json
