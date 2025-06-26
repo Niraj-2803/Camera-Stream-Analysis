@@ -574,7 +574,16 @@ def execute_user_ai_models(user_id, camera_id, frame, rtsp_url=None, save_to_jso
             #         print(f"❌ Error during posture tracking execution: {e}")
             # else:
             try:
+                model = YOLO('yolo11n-pose.pt')
+
+                # Read image
+                # frame = cv2.imread(r'D:\All projects\Camex\image.png')
+
+                # Run pose inference
+                results = model(frame)
                 boxes = []  # Replace with real boxes if needed
+                if results:
+                    boxes = results
                 processed_frame = function_to_execute(frame, boxes)
                 print(f"Processed frame using {function_name}.")
             except Exception as e:
