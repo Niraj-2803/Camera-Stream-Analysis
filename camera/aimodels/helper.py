@@ -592,21 +592,6 @@ def classify_posture(kp, conf, ang, img_h=None, min_visible=8):
     return 'Uncertain'
 
 
-# ─── Seat polygons & timers ─────────────────────
-seats = {
-    'seat_1': [(343.2,368.9),(507.3,275.4),(431.7,157.4),(235.5,222.8)],
-    'seat_2': [(348.3,374.1),(517.6,290.8),(621.4,438.2),(448.3,533.1)],
-    'seat_3': [(463.7,563.8),(670.1,501.0),(804.1,719.0),(522.7,719.0)],
-    'seat_4': [(818.8,575.4),(1025.3,429.2),(1250.9,594.6),
-               (1137.2,719.0),(843.2,719.0),(770.1,617.7)],
-    'seat_5': [(665.0,353.6),(838.1,238.2),(1011.2,427.9),(811.2,574.1)],
-}
-seat_poly     = {name: Polygon(pts) for name, pts in seats.items()}
-empty_since   = {name: None for name in seats}
-empty_duration= {name: 0    for name in seats}
-stats         = {name: defaultdict(float) for name in seats}
-fps = 25
-# ────────────────────────────────────────────────
 
 
 # def draw_seats(img, poly_map, stats):
@@ -658,7 +643,24 @@ def draw_label(img, text, org, font=cv2.FONT_HERSHEY_SIMPLEX, font_scale=0.6, tx
 
 
 
-def seat_status(img, results, poly_map, stats, empty_since, empty_duration, fps):
+def seat_status(img, results):
+
+    # ─── Seat polygons & timers ─────────────────────
+    seats = {
+        'seat_1': [(343.2,368.9),(507.3,275.4),(431.7,157.4),(235.5,222.8)],
+        'seat_2': [(348.3,374.1),(517.6,290.8),(621.4,438.2),(448.3,533.1)],
+        'seat_3': [(463.7,563.8),(670.1,501.0),(804.1,719.0),(522.7,719.0)],
+        'seat_4': [(818.8,575.4),(1025.3,429.2),(1250.9,594.6),
+                (1137.2,719.0),(843.2,719.0),(770.1,617.7)],
+        'seat_5': [(665.0,353.6),(838.1,238.2),(1011.2,427.9),(811.2,574.1)],
+    }
+    poly_map     = {name: Polygon(pts) for name, pts in seats.items()}
+    empty_since   = {name: None for name in seats}
+    empty_duration= {name: 0    for name in seats}
+    stats         = {name: defaultdict(float) for name in seats}
+    fps = 25
+    # ────────────────────────────────────────────────
+
     now = time.time()
     # extract box centers
     boxes = (results[0].boxes.xyxy.cpu().numpy()
