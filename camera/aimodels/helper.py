@@ -727,7 +727,9 @@ def execute_user_ai_models(user_id, camera_id, frame, rtsp_url=None, save_to_jso
             "pixelate_people": pixelate_people,
             "count_people": count_people,
             "generate_people_heatmap": generate_people_heatmap,
-            "track_posture_and_occupancy": track_posture_and_occupancy
+            "track_posture_and_occupancy": track_posture_and_occupancy,
+            "seat_status": seat_status  
+
         }
 
         if function_name in function_map:
