@@ -591,41 +591,120 @@ def classify_posture(kp, conf, ang, img_h=None, min_visible=8):
 
     return 'Uncertain'
 
-def draw_seats(img, poly_map, stats):
-    """
-    Draw each seat polygon and its current dwell time on the frame.
-    """
-    for name, poly in poly_map.items():
-        pts = np.array(poly.exterior.coords[:-1], np.int32)
-        cv2.polylines(img, [pts], isClosed=True, color=(255, 0, 0), thickness=2)
 
-        cx, cy = map(int, poly.centroid.coords[0])
-        label_text = f"{name}: {stats[name]['dwell']:.1f}s"
-        label_org = (cx - 40, cy + 6)
-
-        draw_label(
-            img,
-            label_text,
-            label_org,
-            font=cv2.FONT_HERSHEY_SIMPLEX,
-            font_scale=0.6,
-            txt_color=(255, 0, 0),
-            bg_color=(0, 0, 0),
-            thickness=2
-        )
+# ─── Seat polygons & timers ─────────────────────
+seats = {
+    'seat_1': [(343.2,368.9),(507.3,275.4),(431.7,157.4),(235.5,222.8)],
+    'seat_2': [(348.3,374.1),(517.6,290.8),(621.4,438.2),(448.3,533.1)],
+    'seat_3': [(463.7,563.8),(670.1,501.0),(804.1,719.0),(522.7,719.0)],
+    'seat_4': [(818.8,575.4),(1025.3,429.2),(1250.9,594.6),
+               (1137.2,719.0),(843.2,719.0),(770.1,617.7)],
+    'seat_5': [(665.0,353.6),(838.1,238.2),(1011.2,427.9),(811.2,574.1)],
+}
+seat_poly     = {name: Polygon(pts) for name, pts in seats.items()}
+empty_since   = {name: None for name in seats}
+empty_duration= {name: 0    for name in seats}
+stats         = {name: defaultdict(float) for name in seats}
+fps = 25
+# ────────────────────────────────────────────────
 
 
-def draw_label(img, text, org, font=cv2.FONT_HERSHEY_SIMPLEX,
-               font_scale=0.6, txt_color=(255, 0, 0), bg_color=(0, 0, 0), thickness=2):
-    """
-    Draw text with a solid background.
-    """
+# def draw_seats(img, poly_map, stats):
+#     """
+#     Draw each seat polygon and its current dwell time on the frame.
+#     """
+#     for name, poly in poly_map.items():
+#         pts = np.array(poly.exterior.coords[:-1], np.int32)
+#         cv2.polylines(img, [pts], isClosed=True, color=(255, 0, 0), thickness=2)
+
+#         cx, cy = map(int, poly.centroid.coords[0])
+#         label_text = f"{name}: {stats[name]['dwell']:.1f}s"
+#         label_org = (cx - 40, cy + 6)
+
+#         draw_label(
+#             img,
+#             label_text,
+#             label_org,
+#             font=cv2.FONT_HERSHEY_SIMPLEX,
+#             font_scale=0.6,
+#             txt_color=(255, 0, 0),
+#             bg_color=(0, 0, 0),
+#             thickness=2
+#         )
+
+
+# def draw_label(img, text, org, font=cv2.FONT_HERSHEY_SIMPLEX,
+#                font_scale=0.6, txt_color=(255, 0, 0), bg_color=(0, 0, 0), thickness=2):
+#     """
+#     Draw text with a solid background.
+#     """
+#     (w, h), base = cv2.getTextSize(text, font, font_scale, thickness)
+#     x, y = org
+#     pad = 2
+
+#     cv2.rectangle(img, (x - pad, y - h - pad), (x + w + pad, y + base + pad), bg_color, -1)
+#     cv2.putText(img, text, org, font, font_scale, txt_color, thickness)
+
+
+def draw_label(img, text, org, font=cv2.FONT_HERSHEY_SIMPLEX, font_scale=0.6, txt_color=(255,0,0), bg_color=(0,0,0), thickness=2):
     (w, h), base = cv2.getTextSize(text, font, font_scale, thickness)
     x, y = org
     pad = 2
-
-    cv2.rectangle(img, (x - pad, y - h - pad), (x + w + pad, y + base + pad), bg_color, -1)
+    cv2.rectangle(img,
+                  (x - pad,        y - h - pad),
+                  (x + w + pad,    y + base + pad),
+                  bg_color, -1)
     cv2.putText(img, text, org, font, font_scale, txt_color, thickness)
+
+
+
+def seat_status(img, results, poly_map, stats, empty_since, empty_duration, fps):
+    now = time.time()
+    # extract box centers
+    boxes = (results[0].boxes.xyxy.cpu().numpy()
+             if results[0].boxes is not None else np.empty((0,4)))
+    centers = [((x1+x2)/2, (y1+y2)/2) for x1,y1,x2,y2 in boxes]
+    for cx, cy in centers:
+        cv2.circle(img, (int(cx), int(cy)), radius=5, color=(0, 0, 255), thickness=-1)
+
+    for name, poly in poly_map.items():
+        occupied = any(poly.contains(Point(x, y)) for x, y in centers)
+
+        if occupied:
+            # accumulate dwell, reset empty
+            stats[name]['dwell']      += 1.0 / fps
+            stats[name]['dwell']  = round(stats[name]['dwell'], 2)
+            empty_since[name]         = None
+            empty_duration[name]      = 0.0
+        else:
+            # start or continue empty timer
+            if empty_since[name] is None:
+                empty_since[name] = now
+            empty_duration[name] = now - empty_since[name]
+
+        # —— ensure empty is always recorded, even if zero —— 
+        stats[name]['empty']  = round(empty_duration[name], 2)
+
+        # draw the seat polygon
+        pts = np.array(poly.exterior.coords[:-1], np.int32)
+        cv2.polylines(img, [pts], isClosed=True, color=(255,0,0), thickness=2)
+
+        # centroid for labels
+        cx, cy = map(int, poly.centroid.coords[0])
+
+
+        # dwell label with background
+        draw_label(img,
+                   f"{name} dwell: {stats[name]['dwell']:.1f}s",
+                   (cx - 40, cy + 6), txt_color=(0,255,0))
+
+        # empty label also with background
+        draw_label(img,
+                   f"{name} empty: {empty_duration[name]:.1f}s",
+                   (cx - 40, cy - 20),
+                   txt_color=(0,255,0))
+        print(stats)
+    return img
 
 
 
