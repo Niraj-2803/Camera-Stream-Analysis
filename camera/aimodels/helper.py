@@ -683,6 +683,10 @@ def seat_status(img, results):
             if empty_since[name] is None:
                 empty_since[name] = now
             empty_duration[name] = now - empty_since[name]
+            stats[name]['empty_total'] += 1.0 / fps
+            #round up
+            stats[name]['empty_total'] = round(stats[name]['empty_total'], 2)
+
 
         # —— ensure empty is always recorded, even if zero —— 
         stats[name]['empty']  = round(empty_duration[name], 2)
@@ -706,6 +710,36 @@ def seat_status(img, results):
                    (cx - 40, cy - 20),
                    txt_color=(0,255,0))
         print(stats)
+        # ——— draw a little background panel ———
+        panel_x, panel_y = 10, 40
+        line_h = 20
+        n = len(poly_map)
+        panel_w = 280
+        panel_h = line_h * n + 10
+        cv2.rectangle(
+            img,
+            (panel_x, panel_y),
+            (panel_x + panel_w, panel_y + panel_h),
+            (0, 0, 0),
+            thickness=-1
+        )
+
+        # ——— overlay each seat’s stats ———
+        for i, name in enumerate(poly_map.keys()):
+            y = panel_y + (i + 1) * line_h
+            txt = (
+                f"{name}: "
+                f"Total Empty {stats[name]['empty_total']:.1f}s"
+            )
+            cv2.putText(
+                img,
+                txt,
+                (panel_x + 5, y),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                (0, 255, 0),
+                2
+            )
     return img
 
 
