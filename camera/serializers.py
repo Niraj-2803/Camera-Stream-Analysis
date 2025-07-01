@@ -35,6 +35,8 @@ class UserAiModelActionSerializer(serializers.Serializer):
         if not AiModel.objects.filter(id=value).exists():
             raise serializers.ValidationError("AiModel with this ID does not exist.")
         return value
+
+
     
 
 class CameraGroupActionSerializer(serializers.Serializer):

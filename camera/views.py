@@ -127,8 +127,31 @@ class CameraListCreateView(GenericAPIView, ListModelMixin):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
+# class ActivateAiModelView(APIView):
+#     permission_classes = [permissions.IsAuthenticated]
+#     @swagger_auto_schema(request_body=UserAiModelActionSerializer, responses={200: UserAiModelSerializer})
+#     def post(self, request):
+#         serializer = UserAiModelActionSerializer(data=request.data)
+#         if not serializer.is_valid():
+#             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+#         user = request.user
+#         aimodel_id = serializer.validated_data['aimodel_id']
+#         is_active = serializer.validated_data['is_active']
+#         aimodel = AiModel.objects.get(id=aimodel_id)
+
+#         # Create or update the UserAiModel instance
+#         obj, created = UserAiModel.objects.update_or_create(
+#             user=user,
+#             aimodel=aimodel,
+#             defaults={'is_active': is_active}
+#         )
+
+#         return Response(UserAiModelSerializer(obj).data, status=status.HTTP_200_OK)
+
 class ActivateAiModelView(APIView):
     permission_classes = [permissions.IsAuthenticated]
+
     @swagger_auto_schema(request_body=UserAiModelActionSerializer, responses={200: UserAiModelSerializer})
     def post(self, request):
         serializer = UserAiModelActionSerializer(data=request.data)
@@ -138,17 +161,24 @@ class ActivateAiModelView(APIView):
         user = request.user
         aimodel_id = serializer.validated_data['aimodel_id']
         is_active = serializer.validated_data['is_active']
-        aimodel = AiModel.objects.get(id=aimodel_id)
 
-        # Create or update the UserAiModel instance
+        try:
+            aimodel = AiModel.objects.get(id=aimodel_id)
+        except AiModel.DoesNotExist:
+            return Response({"detail": "AiModel not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        # Update or create UserAiModel without camera constraint
         obj, created = UserAiModel.objects.update_or_create(
             user=user,
             aimodel=aimodel,
             defaults={'is_active': is_active}
         )
 
-        return Response(UserAiModelSerializer(obj).data, status=status.HTTP_200_OK)
+        # Update AiModel status based on is_active
+        aimodel.status = "Active" if is_active else "Inactive"
+        aimodel.save()
 
+        return Response(UserAiModelSerializer(obj).data, status=status.HTTP_200_OK)
 
 class AddCameraToGroupAPIView(APIView):
     permission_classes = [permissions.IsAuthenticated]
