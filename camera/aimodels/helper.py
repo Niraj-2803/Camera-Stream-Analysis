@@ -631,118 +631,271 @@ def classify_posture(kp, conf, ang, img_h=None, min_visible=8):
 #     cv2.putText(img, text, org, font, font_scale, txt_color, thickness)
 
 
-def draw_label(img, text, org, font=cv2.FONT_HERSHEY_SIMPLEX, font_scale=0.6, txt_color=(255,0,0), bg_color=(0,0,0), thickness=2):
+# def draw_label(img, text, org, font=cv2.FONT_HERSHEY_SIMPLEX, font_scale=0.6, txt_color=(255,0,0), bg_color=(0,0,0), thickness=2):
+#     (w, h), base = cv2.getTextSize(text, font, font_scale, thickness)
+#     x, y = org
+#     pad = 2
+#     cv2.rectangle(img,
+#                   (x - pad,        y - h - pad),
+#                   (x + w + pad,    y + base + pad),
+#                   bg_color, -1)
+#     cv2.putText(img, text, org, font, font_scale, txt_color, thickness)
+
+
+# ─── Seat polygons & timers ─────────────────────
+# seats = {
+#     'seat_1': [(343.2,368.9),(507.3,275.4),(431.7,157.4),(235.5,222.8)],
+#     'seat_2': [(348.3,374.1),(517.6,290.8),(621.4,438.2),(448.3,533.1)],
+#     'seat_3': [(463.7,563.8),(670.1,501.0),(804.1,719.0),(522.7,719.0)],
+#     'seat_4': [(818.8,575.4),(1025.3,429.2),(1250.9,594.6),
+#             (1137.2,719.0),(843.2,719.0),(770.1,617.7)],
+#     'seat_5': [(665.0,353.6),(838.1,238.2),(1011.2,427.9),(811.2,574.1)],
+# }
+# poly_map     = {name: Polygon(pts) for name, pts in seats.items()}
+# empty_since   = {name: None for name in seats}
+# empty_duration= {name: 0    for name in seats}
+# stats         = {name: defaultdict(float) for name in seats}
+# fps = 25
+
+seats = {
+    'seat_1': [(343.2, 368.9), (507.3, 275.4), (431.7, 157.4), (235.5, 222.8)],
+    'seat_2': [(348.3, 374.1), (517.6, 290.8), (621.4, 438.2), (448.3, 533.1)],
+    'seat_3': [(463.7, 563.8), (670.1, 501.0), (804.1, 719.0), (522.7, 719.0)],
+    'seat_4': [(818.8, 575.4), (1025.3, 429.2), (1250.9, 594.6), (1137.2, 719.0), (843.2, 719.0), (770.1, 617.7)],
+    'seat_5': [(665.0, 353.6), (838.1, 238.2), (1011.2, 427.9), (811.2, 574.1)],
+}
+
+# Create Shapely polygons and integer arrays for drawing
+poly_map = {name: Polygon(pts) for name, pts in seats.items()}
+poly_int = {name: np.array(pts, np.int32) for name, pts in seats.items()}
+
+# Stats: dwell, current empty, total empty
+stats = {name: {'dwell': 0.0, 'empty': 0.0, 'empty_total': 0.0} for name in seats}
+
+# Timing variable (initialized on first call)
+last_ts = None
+# ────────────────────────────────────────────────
+
+# def seat_status(img, results):
+
+    
+#     now = time.time()
+#     # extract box centers
+#     boxes = (results[0].boxes.xyxy.cpu().numpy()
+#              if results[0].boxes is not None else np.empty((0,4)))
+#     centers = [((x1+x2)/2, (y1+y2)/2) for x1,y1,x2,y2 in boxes]
+#     for cx, cy in centers:
+#         cv2.circle(img, (int(cx), int(cy)), radius=5, color=(0, 0, 255), thickness=-1)
+
+#     for name, poly in poly_map.items():
+#         occupied = any(poly.contains(Point(x, y)) for x, y in centers)
+
+#         if occupied:
+#             # accumulate dwell, reset empty
+#             stats[name]['dwell']      += 1.0 / fps
+#             stats[name]['dwell']  = round(stats[name]['dwell'], 2)
+#             empty_since[name]         = None
+#             empty_duration[name]      = 0.0
+#         else:
+#             # start or continue empty timer
+#             if empty_since[name] is None:
+#                 empty_since[name] = now
+#             empty_duration[name] = now - empty_since[name]
+#             stats[name]['empty_total'] += 1.0 / fps
+#             #round up
+#             stats[name]['empty_total'] = round(stats[name]['empty_total'], 2)
+
+
+#         # —— ensure empty is always recorded, even if zero —— 
+#         stats[name]['empty']  = round(empty_duration[name], 2)
+
+#         # draw the seat polygon
+#         pts = np.array(poly.exterior.coords[:-1], np.int32)
+#         cv2.polylines(img, [pts], isClosed=True, color=(255,0,0), thickness=2)
+
+#         # centroid for labels
+#         cx, cy = map(int, poly.centroid.coords[0])
+
+
+#         # dwell label with background
+#         draw_label(img,
+#                    f"{name} dwell: {stats[name]['dwell']:.1f}s",
+#                    (cx - 40, cy + 6), txt_color=(0,255,0))
+
+#         # empty label also with background
+#         draw_label(img,
+#                    f"{name} empty: {empty_duration[name]:.1f}s",
+#                    (cx - 40, cy - 20),
+#                    txt_color=(0,255,0))
+#         print(stats)
+#         # ——— draw a little background panel ———
+#         panel_x, panel_y = 10, 40
+#         line_h = 20
+#         n = len(poly_map)
+#         panel_w = 280
+#         panel_h = line_h * n + 10
+#         cv2.rectangle(
+#             img,
+#             (panel_x, panel_y),
+#             (panel_x + panel_w, panel_y + panel_h),
+#             (0, 0, 0),
+#             thickness=-1
+#         )
+
+#         # ——— overlay each seat’s stats ———
+#         for i, name in enumerate(poly_map.keys()):
+#             y = panel_y + (i + 1) * line_h
+#             txt = (
+#                 f"{name}: "
+#                 f"Total Empty {stats[name]['empty_total']:.1f}s"
+#             )
+#             cv2.putText(
+#                 img,
+#                 txt,
+#                 (panel_x + 5, y),
+#                 cv2.FONT_HERSHEY_SIMPLEX,
+#                 0.6,
+#                 (0, 255, 0),
+#                 2
+#             )
+#     return img
+
+def seat_status(img, results):
+    """
+    Update and draw seat occupancy stats using real elapsed time between calls.
+    """
+    global last_ts
+    now = time.time()
+    # Compute delta-time since last frame
+    if last_ts is None:
+        dt = 0.0
+    else:
+        dt = now - last_ts
+    last_ts = now
+
+    # Panel metrics (for overlay)
+    panel_x, panel_y = 10, 40
+    line_h = 20
+    panel_w = 280
+    panel_h = line_h * len(seats) + 10
+
+    # Draw panel background once per frame
+    cv2.rectangle(img,
+                  (panel_x, panel_y),
+                  (panel_x + panel_w, panel_y + panel_h),
+                  (0, 0, 0), -1)
+
+    # Extract detection boxes and compute centers
+    result = results[0]
+    boxes = result.boxes.xyxy.cpu().numpy() if result.boxes is not None else np.empty((0, 4))
+    centers = [((x1 + x2) / 2, (y1 + y2) / 2) for x1, y1, x2, y2 in boxes]
+    for cx, cy in centers:
+        cv2.circle(img, (int(cx), int(cy)), radius=5, color=(0, 0, 255), thickness=-1)
+
+    # Update stats per seat
+    for i, (name, poly) in enumerate(poly_map.items()):
+        occupied = any(poly.contains(Point(x, y)) for x, y in centers)
+
+        if occupied:
+            stats[name]['dwell'] += dt
+            stats[name]['empty'] = 0.0
+        else:
+            stats[name]['empty'] += dt
+            stats[name]['empty_total'] += dt
+
+        # Draw seat polygon
+        cv2.polylines(img, [poly_int[name]], True, (255, 0, 0), 2)
+
+        # Draw labels at centroid
+        cx, cy = map(int, poly.centroid.coords[0])
+        draw_label(img, f"{name} dwell: {stats[name]['dwell']:.1f}s", (cx - 40, cy + 6))
+        draw_label(img, f"{name} empty: {stats[name]['empty']:.1f}s", (cx - 40, cy - 20))
+
+        # Overlay total-empty stats on panel
+        y = panel_y + (i + 1) * line_h
+        cv2.putText(
+            img,
+            f"{name}: total empty {stats[name]['empty_total']:.1f}s",
+            (panel_x + 5, y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (0, 255, 0),
+            2
+        )
+        print(stats)
+
+    return img
+
+
+def draw_label(img, text, org,
+               font=cv2.FONT_HERSHEY_SIMPLEX,
+               font_scale=0.6,
+               txt_color=(255, 0, 0),
+               bg_color=(0, 0, 0),
+               thickness=2):
     (w, h), base = cv2.getTextSize(text, font, font_scale, thickness)
     x, y = org
     pad = 2
     cv2.rectangle(img,
-                  (x - pad,        y - h - pad),
-                  (x + w + pad,    y + base + pad),
+                  (x - pad, y - h - pad),
+                  (x + w + pad, y + base + pad),
                   bg_color, -1)
     cv2.putText(img, text, org, font, font_scale, txt_color, thickness)
 
 
-# ─── Seat polygons & timers ─────────────────────
-seats = {
-    'seat_1': [(343.2,368.9),(507.3,275.4),(431.7,157.4),(235.5,222.8)],
-    'seat_2': [(348.3,374.1),(517.6,290.8),(621.4,438.2),(448.3,533.1)],
-    'seat_3': [(463.7,563.8),(670.1,501.0),(804.1,719.0),(522.7,719.0)],
-    'seat_4': [(818.8,575.4),(1025.3,429.2),(1250.9,594.6),
-            (1137.2,719.0),(843.2,719.0),(770.1,617.7)],
-    'seat_5': [(665.0,353.6),(838.1,238.2),(1011.2,427.9),(811.2,574.1)],
-}
-poly_map     = {name: Polygon(pts) for name, pts in seats.items()}
-empty_since   = {name: None for name in seats}
-empty_duration= {name: 0    for name in seats}
-stats         = {name: defaultdict(float) for name in seats}
-fps = 25
-# ────────────────────────────────────────────────
+# REGION        = [(10, 400), (1000, 400)]
+# CLASSES       = [0]
+# SHOW_WINDOW   = False
+# def count_objects(frame, counter):
+#     results = counter.process(frame)
+#     img = results.plot_im
+#     counter.display_counts(img)
+#     draw_label(img, f"Total IN: {counter.in_count}", (90, 30))
+#     draw_label(img, f"Total OUT: {counter.out_count}", (90, 60))
+#     return img
 
-def seat_status(img, results):
+# def main():
+#     # Initialize counter
+#     counter = solutions.ObjectCounter(
+#         model=MODEL_PATH,
+#         region=REGION,
+#         classes=[0]
+#     )
 
-    
-    now = time.time()
-    # extract box centers
-    boxes = (results[0].boxes.xyxy.cpu().numpy()
-             if results[0].boxes is not None else np.empty((0,4)))
-    centers = [((x1+x2)/2, (y1+y2)/2) for x1,y1,x2,y2 in boxes]
-    for cx, cy in centers:
-        cv2.circle(img, (int(cx), int(cy)), radius=5, color=(0, 0, 255), thickness=-1)
+#     cap = cv2.VideoCapture(VIDEO_SOURCE)
+#     if not cap.isOpened():
+#         raise IOError(f"Cannot open video source {VIDEO_SOURCE}")
 
-    for name, poly in poly_map.items():
-        occupied = any(poly.contains(Point(x, y)) for x, y in centers)
+#     # ——— HERE: fetch frame properties before creating writer ———
+#     w   = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+#     h   = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+#     fps = cap.get(cv2.CAP_PROP_FPS) or 30
+#     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+#     writer = cv2.VideoWriter(OUTPUT_PATH, fourcc, fps, (w, h))
+#     # ————————————————————————————————————————————————————————
 
-        if occupied:
-            # accumulate dwell, reset empty
-            stats[name]['dwell']      += 1.0 / fps
-            stats[name]['dwell']  = round(stats[name]['dwell'], 2)
-            empty_since[name]         = None
-            empty_duration[name]      = 0.0
-        else:
-            # start or continue empty timer
-            if empty_since[name] is None:
-                empty_since[name] = now
-            empty_duration[name] = now - empty_since[name]
-            stats[name]['empty_total'] += 1.0 / fps
-            #round up
-            stats[name]['empty_total'] = round(stats[name]['empty_total'], 2)
+#     print("Starting object counting…")
 
+#     try:
+#         while True:
+#             ret, frame = cap.read()
+#             if not ret:
+#                 break
 
-        # —— ensure empty is always recorded, even if zero —— 
-        stats[name]['empty']  = round(empty_duration[name], 2)
+#             annotated = count_objects(frame, counter)
+#             writer.write(annotated)
 
-        # draw the seat polygon
-        pts = np.array(poly.exterior.coords[:-1], np.int32)
-        cv2.polylines(img, [pts], isClosed=True, color=(255,0,0), thickness=2)
+#             if SHOW_WINDOW:
+#                 cv2.imshow("Object Counting", annotated)
+#                 if cv2.waitKey(1) & 0xFF == ord('q'):
+#                     break
+#     finally:
+#         cap.release()
+#         writer.release()
+#         if SHOW_WINDOW:
+#             cv2.destroyAllWindows()
 
-        # centroid for labels
-        cx, cy = map(int, poly.centroid.coords[0])
-
-
-        # dwell label with background
-        draw_label(img,
-                   f"{name} dwell: {stats[name]['dwell']:.1f}s",
-                   (cx - 40, cy + 6), txt_color=(0,255,0))
-
-        # empty label also with background
-        draw_label(img,
-                   f"{name} empty: {empty_duration[name]:.1f}s",
-                   (cx - 40, cy - 20),
-                   txt_color=(0,255,0))
-        print(stats)
-        # ——— draw a little background panel ———
-        panel_x, panel_y = 10, 40
-        line_h = 20
-        n = len(poly_map)
-        panel_w = 280
-        panel_h = line_h * n + 10
-        cv2.rectangle(
-            img,
-            (panel_x, panel_y),
-            (panel_x + panel_w, panel_y + panel_h),
-            (0, 0, 0),
-            thickness=-1
-        )
-
-        # ——— overlay each seat’s stats ———
-        for i, name in enumerate(poly_map.keys()):
-            y = panel_y + (i + 1) * line_h
-            txt = (
-                f"{name}: "
-                f"Total Empty {stats[name]['empty_total']:.1f}s"
-            )
-            cv2.putText(
-                img,
-                txt,
-                (panel_x + 5, y),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (0, 255, 0),
-                2
-            )
-    return img
-
-
+#     print(f"Finished. Output saved to {OUTPUT_PATH}")
 
 
 import json
