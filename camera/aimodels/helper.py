@@ -1,25 +1,13 @@
-from collections import defaultdict
 import cv2
+import time
+import json
+import logging
+import numpy as np
 from ultralytics import YOLO
 from ultralytics import solutions
-import numpy as np
-import os
-import cv2
-import numpy as np
-from shapely.geometry import Polygon, Point
-from ultralytics import YOLO
-import json
-import time
 from collections import defaultdict
-import json
 from camera.models import UserAiModel
-import logging
-import cv2
-import numpy as np
-import logging
-import cv2
-import numpy as np
-import time
+from shapely.geometry import Polygon, Point
 
 # Setup logger
 logging.basicConfig(
