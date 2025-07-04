@@ -666,7 +666,7 @@ FIRE_SMOKE_WEIGHTS_PATH   = r"fire_smoke_model.pt"
 
 FIRE_SMOKE_model = YOLO(FIRE_SMOKE_WEIGHTS_PATH)
 
-def fire_smoke_detction(frame, boxes):
+def fire_smoke_detection(frame, boxes):
     model = FIRE_SMOKE_model
     results = model.predict(frame,)
     annotated = results[0].plot()
@@ -703,7 +703,7 @@ def execute_user_ai_models(
             "generate_people_heatmap": generate_people_heatmap,
             "track_posture_and_occupancy": track_posture_and_occupancy,
             "seat_status": seat_status,
-            "fire_smoke_detction":fire_smoke_detction,
+            "fire_smoke_detction":fire_smoke_detection,
             "ppe_detection":ppe_detection
         }
 
