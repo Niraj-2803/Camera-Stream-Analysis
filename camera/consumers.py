@@ -218,3 +218,111 @@ class CameraStreamConsumer(WebsocketConsumer):
             )
 
         self._stream_camera(rtsp_url, process_frame_callback)
+
+
+import json
+import threading
+import time
+from pathlib import Path
+from datetime import timedelta
+from channels.generic.websocket import WebsocketConsumer
+
+
+class AnalyticsStreamConsumer(WebsocketConsumer):
+    def connect(self):
+        self.accept()
+        self.streaming = True
+        print("📊 Analytics WebSocket connected.")
+
+        # Start live stream in a background thread
+        threading.Thread(target=self.stream_live_analytics, daemon=True).start()
+
+    def disconnect(self, close_code):
+        self.streaming = False
+        print("🛑 Analytics WebSocket disconnected.")
+
+    def seconds_to_hm(self, seconds):
+        td = timedelta(seconds=round(seconds))
+        hours, remainder = divmod(td.total_seconds(), 3600)
+        minutes, _ = divmod(remainder, 60)
+        return f"{int(hours)}h {int(minutes)}m"
+
+    def hm_to_seconds(self, hm_string):
+        try:
+            parts = hm_string.lower().split("h")
+            hours = int(parts[0].strip())
+            minutes = int(parts[1].replace("m", "").strip())
+            return hours * 3600 + minutes * 60
+        except:
+            return 0
+
+    def build_person_from_seat(self, seat_name, seat_data, seat_id):
+        dwell = seat_data.get("dwell", 0.0)
+        empty_total = seat_data.get("empty_total", 0.0)
+        system_time = dwell + empty_total
+        alert = "Long away time" if empty_total >= 3600 else None
+
+        return {
+            "id": seat_id,
+            "person": f"Person{str(seat_id).zfill(3)}",
+            "status": "Active",
+            "productivity": 80.0,
+            "sittingTime": self.seconds_to_hm(dwell),
+            "standingTime": self.seconds_to_hm(0),
+            "awayTime": self.seconds_to_hm(empty_total),
+            "systemTime": round(system_time, 1),
+            "productiveHours": self.seconds_to_hm(dwell),
+            "totalHours": self.seconds_to_hm(system_time),
+            "alerts": alert,
+            "hasAlert": alert is not None
+        }
+
+    def stream_live_analytics(self):
+        file_path = Path("analytics.json")
+        if not file_path.exists():
+            self.send(text_data=json.dumps({"error": "analytics.json not found"}))
+            self.close()
+            return
+
+        with open(file_path, "r") as f:
+            data = json.load(f)
+
+        for frame in data:
+            if not self.streaming:
+                break
+
+            seat_stats = frame.get("stats", {})
+            people = []
+
+            total_productivity = 0.0
+            total_productive_seconds = 0.0
+            total_persons = 0
+            active_alerts = 0
+
+            for i, seat in enumerate(["seat_1", "seat_2", "seat_3", "seat_4", "seat_5"], start=1):
+                if seat in seat_stats:
+                    person = self.build_person_from_seat(seat, seat_stats[seat], seat_id=i)
+                    people.append(person)
+
+                    total_productivity += person["productivity"]
+                    total_productive_seconds += self.hm_to_seconds(person["productiveHours"])
+                    total_persons += 1
+                    if person["hasAlert"]:
+                        active_alerts += 1
+
+            avg_productivity = round(total_productivity / total_persons, 1) if total_persons else 0.0
+            total_productive_hours = round(total_productive_seconds / 3600, 1)
+
+            response = {
+                "saudi_time": frame["saudi_time"],
+                "stats": people,
+                "average_productivity": avg_productivity,
+                "total_productive_hours": total_productive_hours,
+                "active_alerts_count": active_alerts
+            
+            }
+
+            self.send(text_data=json.dumps(response))
+            time.sleep(10)
+
+
