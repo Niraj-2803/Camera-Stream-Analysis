@@ -227,6 +227,14 @@ from datetime import timedelta, datetime
 from channels.generic.websocket import WebsocketConsumer
 
 
+import json
+import threading
+import time
+from pathlib import Path
+from datetime import timedelta, datetime
+from channels.generic.websocket import WebsocketConsumer
+
+
 class AnalyticsStreamConsumer(WebsocketConsumer):
     def connect(self):
         self.accept()
@@ -258,14 +266,14 @@ class AnalyticsStreamConsumer(WebsocketConsumer):
         empty_total = seat_data.get("empty_total", 0.0)
         system_time = dwell + empty_total
 
-        # Apply the correct productivity formula
+        # Productivity formula
         productivity = round((dwell / system_time) * 100, 1) if system_time > 0 else 0.0
         alert = "Long away time" if empty_total >= 3600 else None
 
         return {
             "id": seat_id,
-            "person": f"Person{str(seat_id).zfill(3)}",
-            "status": "Active",
+            "person": seat_name,
+            "status": "Active" if dwell > 0 else "Inactive",
             "productivity": productivity,
             "sittingTime": self.seconds_to_hm(dwell),
             "standingTime": self.seconds_to_hm(0),
@@ -309,7 +317,6 @@ class AnalyticsStreamConsumer(WebsocketConsumer):
                 continue
 
             last_sent_timestamp = frame.get("timestamp")
-
             seat_stats = frame.get("stats", {})
             people = []
 
@@ -318,15 +325,18 @@ class AnalyticsStreamConsumer(WebsocketConsumer):
             total_persons = 0
             active_alerts = 0
 
-            for i, seat in enumerate(["seat_1", "seat_2", "seat_3", "seat_4", "seat_5"], start=1):
-                if seat in seat_stats:
-                    person = self.build_person_from_seat(seat, seat_stats[seat], seat_id=i)
-                    people.append(person)
-                    total_productivity += person["productivity"]
-                    total_productive_seconds += self.hm_to_seconds(person["productiveHours"])
-                    total_persons += 1
-                    if person["hasAlert"]:
-                        active_alerts += 1
+            # Dynamically handle all seat/person entries except "overall"
+            for idx, (seat_name, seat_data) in enumerate(seat_stats.items(), start=1):
+                if seat_name == "overall":
+                    continue
+                person = self.build_person_from_seat(seat_name, seat_data, seat_id=idx)
+                people.append(person)
+
+                total_productivity += person["productivity"]
+                total_productive_seconds += self.hm_to_seconds(person["productiveHours"])
+                total_persons += 1
+                if person["hasAlert"]:
+                    active_alerts += 1
 
             avg_productivity = round(total_productivity / total_persons, 1) if total_persons else 0.0
             total_productive_hours = round(total_productive_seconds / 3600, 1)
