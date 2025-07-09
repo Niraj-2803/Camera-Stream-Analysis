@@ -284,28 +284,16 @@ class AnalyticsStreamConsumer(WebsocketConsumer):
             self.close()
             return
 
-        last_sent_timestamp = None
+        with open(analytics_file, "r") as f:
+            data = json.load(f)
+
+        if not data:
+            self.send(text_data=json.dumps({"error": "No data found in analytics file"}))
+            self.close()
+            return
 
         while self.streaming:
-            try:
-                with open(analytics_file, "r") as f:
-                    data = json.load(f)
-            except Exception as e:
-                self.send(text_data=json.dumps({"error": f"Error reading analytics file: {str(e)}"}))
-                time.sleep(10)
-                continue
-
-            if not data:
-                time.sleep(10)
-                continue
-
-            frame = data[-1]
-            if frame.get("timestamp") == last_sent_timestamp:
-                time.sleep(10)
-                continue  # No new data
-
-            last_sent_timestamp = frame.get("timestamp")
-
+            frame = data[-1]  # Get the latest frame only
             seat_stats = frame.get("stats", {})
             people = []
 
@@ -318,6 +306,7 @@ class AnalyticsStreamConsumer(WebsocketConsumer):
                 if seat in seat_stats:
                     person = self.build_person_from_seat(seat, seat_stats[seat], seat_id=i)
                     people.append(person)
+
                     total_productivity += person["productivity"]
                     total_productive_seconds += self.hm_to_seconds(person["productiveHours"])
                     total_persons += 1
