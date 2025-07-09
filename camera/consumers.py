@@ -226,6 +226,7 @@ from pathlib import Path
 from datetime import timedelta, datetime
 from channels.generic.websocket import WebsocketConsumer
 
+
 class AnalyticsStreamConsumer(WebsocketConsumer):
     def connect(self):
         self.accept()
@@ -256,13 +257,16 @@ class AnalyticsStreamConsumer(WebsocketConsumer):
         dwell = seat_data.get("dwell", 0.0)
         empty_total = seat_data.get("empty_total", 0.0)
         system_time = dwell + empty_total
+
+        # Apply the correct productivity formula
+        productivity = round((dwell / system_time) * 100, 1) if system_time > 0 else 0.0
         alert = "Long away time" if empty_total >= 3600 else None
 
         return {
             "id": seat_id,
             "person": f"Person{str(seat_id).zfill(3)}",
             "status": "Active",
-            "productivity": 80.0,
+            "productivity": productivity,
             "sittingTime": self.seconds_to_hm(dwell),
             "standingTime": self.seconds_to_hm(0),
             "awayTime": self.seconds_to_hm(empty_total),
@@ -302,7 +306,7 @@ class AnalyticsStreamConsumer(WebsocketConsumer):
             frame = data[-1]
             if frame.get("timestamp") == last_sent_timestamp:
                 time.sleep(10)
-                continue  # No new data
+                continue
 
             last_sent_timestamp = frame.get("timestamp")
 
