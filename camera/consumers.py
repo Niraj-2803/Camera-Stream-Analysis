@@ -232,14 +232,20 @@ import threading
 import time
 from pathlib import Path
 from datetime import timedelta, datetime
+from urllib.parse import parse_qs
 from channels.generic.websocket import WebsocketConsumer
-
 
 class AnalyticsStreamConsumer(WebsocketConsumer):
     def connect(self):
+        # Extract ?cam=analytics_2 from query string (default to analytics_1)
+        query_string = self.scope.get("query_string", b"").decode()
+        params = parse_qs(query_string)
+        self.folder_name = params.get("cam", ["analytics_1"])[0]  # Default folder is analytics_1
+
         self.accept()
         self.streaming = True
-        print("📊 Analytics WebSocket connected.")
+        print(f"📊 WebSocket connected. Streaming from folder: {self.folder_name}")
+
         threading.Thread(target=self.stream_live_analytics, daemon=True).start()
 
     def disconnect(self, close_code):
@@ -266,7 +272,6 @@ class AnalyticsStreamConsumer(WebsocketConsumer):
         empty_total = seat_data.get("empty_total", 0.0)
         system_time = dwell + empty_total
 
-        # Productivity formula
         productivity = round((dwell / system_time) * 100, 1) if system_time > 0 else 0.0
         alert = "Long away time" if empty_total >= 3600 else None
 
@@ -287,23 +292,24 @@ class AnalyticsStreamConsumer(WebsocketConsumer):
 
     def get_today_analytics_file(self):
         today_str = datetime.now().strftime("%Y-%m-%d")
-        return Path(f"analytics/{today_str}.json")
+        return Path(f"{self.folder_name}/{today_str}.json")
 
     def stream_live_analytics(self):
-        analytics_file = self.get_today_analytics_file()
-        if not analytics_file.exists():
-            self.send(text_data=json.dumps({"error": f"{analytics_file.name} not found"}))
-            self.close()
-            return
-
         last_sent_timestamp = None
 
         while self.streaming:
+            analytics_file = self.get_today_analytics_file()
+
+            if not analytics_file.exists():
+                self.send(text_data=json.dumps({"error": f"{analytics_file.name} not found"}))
+                time.sleep(10)
+                continue
+
             try:
                 with open(analytics_file, "r") as f:
                     data = json.load(f)
             except Exception as e:
-                self.send(text_data=json.dumps({"error": f"Error reading analytics file: {str(e)}"}))
+                self.send(text_data=json.dumps({"error": f"Error reading file: {str(e)}"}))
                 time.sleep(10)
                 continue
 
@@ -325,13 +331,11 @@ class AnalyticsStreamConsumer(WebsocketConsumer):
             total_persons = 0
             active_alerts = 0
 
-            # Dynamically handle all seat/person entries except "overall"
             for idx, (seat_name, seat_data) in enumerate(seat_stats.items(), start=1):
                 if seat_name == "overall":
                     continue
                 person = self.build_person_from_seat(seat_name, seat_data, seat_id=idx)
                 people.append(person)
-
                 total_productivity += person["productivity"]
                 total_productive_seconds += self.hm_to_seconds(person["productiveHours"])
                 total_persons += 1
