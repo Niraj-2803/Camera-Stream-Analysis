@@ -219,22 +219,18 @@ class CameraStreamConsumer(WebsocketConsumer):
 
         self._stream_camera(rtsp_url, process_frame_callback)
 
-
 import json
 import threading
 import time
 from pathlib import Path
-from datetime import timedelta
+from datetime import timedelta, datetime
 from channels.generic.websocket import WebsocketConsumer
-
 
 class AnalyticsStreamConsumer(WebsocketConsumer):
     def connect(self):
         self.accept()
         self.streaming = True
         print("📊 Analytics WebSocket connected.")
-
-        # Start live stream in a background thread
         threading.Thread(target=self.stream_live_analytics, daemon=True).start()
 
     def disconnect(self, close_code):
@@ -277,20 +273,27 @@ class AnalyticsStreamConsumer(WebsocketConsumer):
             "hasAlert": alert is not None
         }
 
+    def get_today_analytics_file(self):
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        return Path(f"analytics/{today_str}.json")
+
     def stream_live_analytics(self):
-        file_path = Path("analytics.json")
-        if not file_path.exists():
-            self.send(text_data=json.dumps({"error": "analytics.json not found"}))
+        analytics_file = self.get_today_analytics_file()
+        if not analytics_file.exists():
+            self.send(text_data=json.dumps({"error": f"{analytics_file.name} not found"}))
             self.close()
             return
 
-        with open(file_path, "r") as f:
+        with open(analytics_file, "r") as f:
             data = json.load(f)
 
-        for frame in data:
-            if not self.streaming:
-                break
+        if not data:
+            self.send(text_data=json.dumps({"error": "No data found in analytics file"}))
+            self.close()
+            return
 
+        while self.streaming:
+            frame = data[-1]  # Get the latest frame only
             seat_stats = frame.get("stats", {})
             people = []
 
@@ -314,15 +317,12 @@ class AnalyticsStreamConsumer(WebsocketConsumer):
             total_productive_hours = round(total_productive_seconds / 3600, 1)
 
             response = {
-                "saudi_time": frame["saudi_time"],
+                "saudi_time": frame.get("saudi_time"),
                 "stats": people,
                 "average_productivity": avg_productivity,
                 "total_productive_hours": total_productive_hours,
                 "active_alerts_count": active_alerts
-            
             }
 
             self.send(text_data=json.dumps(response))
             time.sleep(10)
-
-
