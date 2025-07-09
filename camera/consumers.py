@@ -344,14 +344,17 @@ class AnalyticsStreamConsumer(WebsocketConsumer):
 
             avg_productivity = round(total_productivity / total_persons, 1) if total_persons else 0.0
             total_productive_hours = round(total_productive_seconds / 3600, 1)
+            total_hours = round(sum(person["systemTime"] for person in people) / 3600, 1)
 
             response = {
                 "saudi_time": frame.get("saudi_time"),
                 "stats": people,
                 "average_productivity": avg_productivity,
                 "total_productive_hours": total_productive_hours,
+                "total_hours": total_hours, 
                 "active_alerts_count": active_alerts
             }
+
 
             self.send(text_data=json.dumps(response))
             time.sleep(10)
