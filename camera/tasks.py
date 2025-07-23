@@ -172,6 +172,8 @@ def save_seat_stats_to_file():
         for model in active_models:
             user_id = model.user.id
             camera_id = model.camera.id
+            rtsp_url = model.camera.rtsp_url  # ✅ fetch from Camera model
+            start_camera_stream(user_id, camera_id, rtsp_url)
             key = (user_id, camera_id)
             stats = stats_store.get(key)
             logger.info(f'{stats=}')
