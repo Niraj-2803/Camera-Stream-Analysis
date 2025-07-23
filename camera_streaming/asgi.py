@@ -1,5 +1,6 @@
 import os
 import django
+from django.urls import path
 
 # 1. Django settings
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'camera_streaming.settings')
@@ -33,7 +34,9 @@ wrapped_app.mount("/", django_asgi_app)
 application = ProtocolTypeRouter({
     "http": wrapped_app,
     "websocket": AuthMiddlewareStack(
-        URLRouter(camera.routing.websocket_urlpatterns)
+        URLRouter([
+            path("api/", URLRouter(camera.routing.websocket_urlpatterns))
+        ])
     ),
 })
 
