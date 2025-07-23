@@ -358,3 +358,142 @@ class AnalyticsStreamConsumer(WebsocketConsumer):
 
             self.send(text_data=json.dumps(response))
             time.sleep(10)
+
+
+
+from channels.generic.websocket import WebsocketConsumer
+from datetime import datetime, timedelta
+from pathlib import Path
+from django.conf import settings
+import threading
+import time
+import json
+from urllib.parse import parse_qs
+
+class LiveSeatStatsConsumer(WebsocketConsumer):
+    def connect(self):
+        query_string = self.scope.get("query_string", b"").decode()
+        params = parse_qs(query_string)
+
+        self.user_id = params.get("user_id", [None])[0]
+        self.camera_id = params.get("camera_id", [None])[0]
+        self.date_str = params.get("date", [datetime.now().strftime("%Y-%m-%d")])[0]
+
+        if not self.user_id or not self.camera_id:
+            self.close()
+            return
+
+        self.accept()
+        self.streaming = True
+        print(f"📡 WebSocket connected for seat stats: user={self.user_id}, cam={self.camera_id}, date={self.date_str}")
+        threading.Thread(target=self.stream_stats, daemon=True).start()
+
+    def disconnect(self, close_code):
+        self.streaming = False
+        print("🔌 WebSocket disconnected for seat stats")
+
+    def get_file_path(self):
+        filename = f"seat_user{self.user_id}_cam{self.camera_id}_{self.date_str}.json"
+        return Path(settings.MEDIA_ROOT) / "seat_stats" / filename
+
+    def seconds_to_hm(self, seconds):
+        td = timedelta(seconds=round(seconds))
+        hours, remainder = divmod(td.total_seconds(), 3600)
+        minutes, _ = divmod(remainder, 60)
+        return f"{int(hours)}h {int(minutes)}m"
+
+    def hm_to_seconds(self, hm_string):
+        try:
+            parts = hm_string.lower().split("h")
+            hours = int(parts[0].strip())
+            minutes = int(parts[1].replace("m", "").strip())
+            return hours * 3600 + minutes * 60
+        except:
+            return 0
+
+    def build_person_from_seat(self, seat_name, seat_data, seat_id):
+        dwell = seat_data.get("dwell", 0.0)
+        empty_total = seat_data.get("empty_total", 0.0)
+        system_time = dwell + empty_total
+
+        productivity = round((dwell / system_time) * 100, 1) if system_time > 0 else 0.0
+        alert = "Long away time" if empty_total >= 3600 else None
+
+        return {
+            "id": seat_id,
+            "person": seat_name,
+            "status": "Active" if dwell > 0 else "Inactive",
+            "productivity": productivity,
+            "sittingTime": self.seconds_to_hm(dwell),
+            "standingTime": self.seconds_to_hm(0),
+            "awayTime": self.seconds_to_hm(empty_total),
+            "systemTime": round(system_time, 1),
+            "productiveHours": self.seconds_to_hm(dwell),
+            "totalHours": self.seconds_to_hm(system_time),
+            "alerts": alert,
+            "hasAlert": alert is not None
+        }
+
+    def stream_stats(self):
+        last_sent_timestamp = None
+
+        while self.streaming:
+            filepath = self.get_file_path()
+
+            if not filepath.exists():
+                self.send(text_data=json.dumps({"error": f"{filepath.name} not found"}))
+                time.sleep(10)
+                continue
+
+            try:
+                with open(filepath, "r") as f:
+                    data = json.load(f)
+            except Exception as e:
+                self.send(text_data=json.dumps({"error": f"Error reading file: {str(e)}"}))
+                time.sleep(10)
+                continue
+
+            if not data or not isinstance(data, list):
+                time.sleep(10)
+                continue
+
+            latest = data[-1]
+            if latest.get("timestamp") == last_sent_timestamp:
+                time.sleep(10)
+                continue
+
+            last_sent_timestamp = latest["timestamp"]
+            seat_stats = latest.get("stats", {})
+            people = []
+
+            total_productivity = 0.0
+            total_productive_seconds = 0.0
+            total_system_seconds = 0.0
+            total_persons = 0
+            active_alerts = 0
+
+            for idx, (seat_name, seat_data) in enumerate(seat_stats.items(), start=1):
+                person = self.build_person_from_seat(seat_name, seat_data, seat_id=idx)
+                people.append(person)
+                total_productivity += person["productivity"]
+                total_productive_seconds += self.hm_to_seconds(person["productiveHours"])
+                total_system_seconds += person["systemTime"]
+                total_persons += 1
+                if person["hasAlert"]:
+                    active_alerts += 1
+
+            avg_productivity = round(total_productivity / total_persons, 1) if total_persons else 0.0
+            total_productive_hours = round(total_productive_seconds / 3600, 1)
+            total_hours = round(total_system_seconds / 3600, 1)
+
+            response = {
+                "saudi_time": datetime.now().isoformat(),
+                "stats": people,
+                "average_productivity": avg_productivity,
+                "total_productive_hours": total_productive_hours,
+                "total_hours": total_hours,
+                "active_alerts_count": active_alerts
+            }
+
+            self.send(text_data=json.dumps(response))
+            time.sleep(10)
