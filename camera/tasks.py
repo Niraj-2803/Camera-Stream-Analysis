@@ -161,6 +161,8 @@ def save_seat_stats_to_file():
             aimodel__function_name="seat_status",
             is_active=True
         ).select_related("user", "camera")
+        logger.info(f'{active_models=}')
+
     except Exception as e:
         logger.error(f"❌ Failed to fetch UserAiModels: {e}")
         return
