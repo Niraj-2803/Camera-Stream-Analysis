@@ -41,8 +41,6 @@ import logging
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
-logging.basicConfig(level=logging.DEBUG)
-logging.basicConfig(level=logging.ERROR)
 
 
 # -------------------------------
@@ -83,7 +81,7 @@ try:
     model = YOLO("yolo11n-pose.pt")
     logger.info("✅ YOLO model loaded successfully.")
 except Exception as e:
-    logger.error(f"❌ Error loading YOLO model: {e}")
+    logger.info(f"❌ Error loading YOLO model: {e}")
 
 # -------------------------------
 # Seat Status Calculation
@@ -107,7 +105,7 @@ def seat_status(img, results, stats):
             s["empty"] += dt
             s["empty_total"] += dt
 
-    logger.debug(f"Seat status updated for frame. Time delta: {dt:.2f}s")
+    logger.info(f"Seat status updated for frame. Time delta: {dt:.2f}s")
 
 # -------------------------------
 # Start Camera Stream Thread
@@ -118,7 +116,7 @@ def process_camera(user_id, camera_id, rtsp_url):
     cap = cv2.VideoCapture(rtsp_url)
 
     if not cap.isOpened():
-        logger.error(f"❌ Unable to open camera stream: {rtsp_url}")
+        logger.info(f"❌ Unable to open camera stream: {rtsp_url}")
         return
 
     while True:
@@ -133,7 +131,7 @@ def process_camera(user_id, camera_id, rtsp_url):
                 stats = stats_store[(user_id, camera_id)]
                 seat_status(frame, results, stats)
         except Exception as e:
-            logger.error(f"❌ Error processing frame: {e}")
+            logger.info(f"❌ Error processing frame: {e}")
 
         time.sleep(0.5)
 
@@ -166,7 +164,7 @@ def save_seat_stats_to_file():
         logger.info(f'{active_models=}')
 
     except Exception as e:
-        logger.error(f"❌ Failed to fetch UserAiModels: {e}")
+        logger.info(f"❌ Failed to fetch UserAiModels: {e}")
         return
 
     with lock:
@@ -179,7 +177,7 @@ def save_seat_stats_to_file():
             logger.info(f'{stats=}')
 
             if not stats:
-                logger.debug(f"🚫 No stats yet for user={user_id}, cam={camera_id}")
+                logger.info(f"🚫 No stats yet for user={user_id}, cam={camera_id}")
                 continue
 
             file_name = f"seat_user{user_id}_cam{camera_id}_{today}.json"
@@ -205,7 +203,7 @@ def save_seat_stats_to_file():
                     json.dump(data, f, indent=2)
                 logger.info(f"💾 Stats saved to: {file_name}")
             except Exception as e:
-                logger.error(f"❌ Error writing to file {file_name}: {e}")
+                logger.info(f"❌ Error writing to file {file_name}: {e}")
 
             try:
                 SeatStatsLog.objects.get_or_create(
@@ -215,4 +213,4 @@ def save_seat_stats_to_file():
                     defaults={"stats_file": f"seat_stats/{file_name}"}
                 )
             except Exception as e:
-                logger.error(f"❌ DB save failed for stats log: {e}")
+                logger.info(f"❌ DB save failed for stats log: {e}")
