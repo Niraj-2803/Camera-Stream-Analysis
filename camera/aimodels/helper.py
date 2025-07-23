@@ -16,6 +16,20 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+import os
+import sys
+
+def resource_path(relative_path):
+    """
+    Get absolute path to resource, works for dev and PyInstaller.
+    """
+    try:
+        base_path = sys._MEIPASS  # PyInstaller's temp dir
+    except AttributeError:
+        base_path = os.path.abspath(".")  # Normal run
+    return os.path.join(base_path, relative_path)
+
+
 def pixelate_people(frame, boxes, pixel_size=10):
     for box in boxes:
         cls = int(box.cls[0])
@@ -161,8 +175,8 @@ def process_video_stream(
 # _________________________________________________________________________________________________________________________________________
 # Track Posture 
 
-pose_model = YOLO("yolov8n-pose.pt")  # Use yolov8n-pose.pt for speed
-
+# pose_model = YOLO("yolov8n-pose.pt")  # Use yolov8n-pose.pt for speed
+pose_model = YOLO(resource_path("yolov8n-pose.pt"))
 SEAT_COORDINATES = {
     "seat_1": [(343.2, 368.9), (507.3, 275.4), (431.7, 157.4), (235.5, 222.8)],
     "seat_2": [(348.3, 374.1), (517.6, 290.8), (621.4, 438.2), (448.3, 533.1)],
@@ -642,9 +656,10 @@ def draw_label_seat_status(
 # PPE KIT
 
 
-PPE_WEIGHTS_PATH = r"PPE_model.pt"
+# PPE_WEIGHTS_PATH = r"PPE_model.pt"
 
-PPE_model = YOLO(PPE_WEIGHTS_PATH)
+# PPE_model = YOLO(PPE_WEIGHTS_PATH)
+PPE_model = YOLO(resource_path("PPE_model.pt"))
 
 
 def ppe_detection(frame, boxes):
@@ -662,9 +677,11 @@ def ppe_detection(frame, boxes):
 # _________________________________________________________________________________________________________________________________________
 # Fire Detection
 
-FIRE_SMOKE_WEIGHTS_PATH   = r"fire_smoke_model.pt"
+# FIRE_SMOKE_WEIGHTS_PATH   = r"fire_smoke_model.pt"
 
-FIRE_SMOKE_model = YOLO(FIRE_SMOKE_WEIGHTS_PATH)
+# FIRE_SMOKE_model = YOLO(FIRE_SMOKE_WEIGHTS_PATH)
+FIRE_SMOKE_model = YOLO(resource_path("fire_smoke_model.pt"))
+
 
 def fire_smoke_detection(frame, boxes):
     model = FIRE_SMOKE_model
@@ -731,7 +748,7 @@ def execute_user_ai_models(
             #         print(f"❌ Error during posture tracking execution: {e}")
             # else:
             try:
-                model = YOLO("yolo11n-pose.pt")
+                model = YOLO(resource_path("yolo11n-pose.pt"))
 
                 # Read image
                 # frame = cv2.imread(r'D:\All projects\Camex\image.png')

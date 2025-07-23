@@ -36,3 +36,8 @@ application = ProtocolTypeRouter({
         URLRouter(camera.routing.websocket_urlpatterns)
     ),
 })
+
+
+# # 🚀 Start APScheduler here
+# from camera_streaming.scheduler import start as start_scheduler
+# start_scheduler()

@@ -41,6 +41,7 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'django_celery_beat',
     # Third-party
     'rest_framework',
     'rest_framework_simplejwt.token_blacklist',
@@ -111,6 +112,19 @@ TEMPLATES = [
 
 # Database
 # https://docs.djangoproject.com/en/5.1/ref/settings/#databases
+
+# import os
+
+# PERSISTENT_DIR = os.path.expanduser("~/.camex")  # Example persistent folder
+# os.makedirs(PERSISTENT_DIR, exist_ok=True)  # Make it if missing
+
+# DATABASES = {
+#     'default': {
+#         'ENGINE': 'django.db.backends.sqlite3',
+#         'NAME': os.path.join(PERSISTENT_DIR, "data.sqlite3"),
+#     }
+# }
+
 
 # DATABASES = {
 #     'default': {
@@ -204,3 +218,7 @@ SWAGGER_SETTINGS = {
     },
     'USE_SESSION_AUTH': False,  # 🔥 CRITICAL for Swagger + JWT!
 }
+
+CELERY_BROKER_URL = 'redis://localhost:6379/0'
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
