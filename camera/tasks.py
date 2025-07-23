@@ -41,6 +41,8 @@ import logging
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.ERROR)
 
 
 # -------------------------------
@@ -168,11 +170,13 @@ def save_seat_stats_to_file():
         return
 
     with lock:
+        logger.info(f'{lock=}')
         for model in active_models:
             user_id = model.user.id
             camera_id = model.camera.id
             key = (user_id, camera_id)
             stats = stats_store.get(key)
+            logger.info(f'{stats=}')
 
             if not stats:
                 logger.debug(f"🚫 No stats yet for user={user_id}, cam={camera_id}")
