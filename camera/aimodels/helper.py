@@ -594,6 +594,8 @@ def draw_label_seat_status(
         img, (x - pad, y - h - pad), (x + w + pad, y + base + pad), bg_color, -1
     )
     cv2.putText(img, text, org, font, font_scale, txt_color, thickness)
+
+    
 # _________________________________________________________________________________________________________________________________________
 
 
