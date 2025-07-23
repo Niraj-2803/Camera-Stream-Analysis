@@ -5,39 +5,27 @@ import json
 import logging
 import numpy as np
 from ultralytics import YOLO
-from ultralytics import solutions
 from collections import defaultdict
-from camera.models import UserAiModel
 from shapely.geometry import Polygon, Point
 from celery import shared_task
 from datetime import datetime
+import os
+import time
+import threading
+from datetime import date
+from django.conf import settings
+from camera.models import UserAiModel, SeatStatsLog
+
 
 @shared_task
 def test_task():
     print(f"[{datetime.now()}] ✅ Celery test task ran successfully!")
     return "Done"
 
-import os
-import json
-import time
-import threading
-from datetime import date
-from collections import defaultdict
-
-import cv2
-import numpy as np
-from shapely.geometry import Polygon, Point
-
-from celery import shared_task
-from django.conf import settings
-from ultralytics import YOLO
-
-from camera.models import UserAiModel, SeatStatsLog
 
 # -------------------------------
 # Logging Setup
 # -------------------------------
-import logging
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -150,6 +138,13 @@ def start_camera_stream(user_id, camera_id, rtsp_url):
 # -------------------------------
 @shared_task
 def save_seat_stats_to_file():
+    now = datetime.now()
+
+    # ✅ Only run between 7 AM and 3 PM
+    if not (7 <= now.hour < 15):
+        logger.info("⏰ Outside allowed hours (07:00 - 15:00), skipping save.")
+        return
+
     logger.info("📥 Saving seat stats to files...")
 
     today = date.today()
@@ -162,7 +157,6 @@ def save_seat_stats_to_file():
             is_active=True
         ).select_related("user", "camera")
         logger.info(f'{active_models=}')
-
     except Exception as e:
         logger.info(f"❌ Failed to fetch UserAiModels: {e}")
         return
@@ -172,7 +166,7 @@ def save_seat_stats_to_file():
         for model in active_models:
             user_id = model.user.id
             camera_id = model.camera.id
-            rtsp_url = model.camera.rtsp_url  # ✅ fetch from Camera model
+            rtsp_url = model.camera.rtsp_url
             start_camera_stream(user_id, camera_id, rtsp_url)
             key = (user_id, camera_id)
             stats = stats_store.get(key)
