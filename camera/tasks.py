@@ -141,9 +141,9 @@ def save_seat_stats_to_file():
     now = datetime.now()
 
     # ✅ Only run between 7 AM and 3 PM
-    if not (7 <= now.hour < 15):
-        logger.info("⏰ Outside allowed hours (07:00 - 15:00), skipping save.")
-        return
+    # if not (7 <= now.hour < 15):
+    #     logger.info("⏰ Outside allowed hours (07:00 - 15:00), skipping save.")
+    #     return
 
     logger.info("📥 Saving seat stats to files...")
 
