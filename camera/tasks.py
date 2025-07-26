@@ -46,8 +46,25 @@ from celery import shared_task
 from camera.models import UserAiModel, SeatStatsLog
 from ultralytics import YOLO
 import logging
+import os
+import time
+import json
+import threading
+import logging
+from datetime import datetime, date, time as dtime
+from collections import defaultdict
+from shapely.geometry import Polygon, Point
+from ultralytics import YOLO
+import cv2
 
+from django.conf import settings
+from celery import shared_task
+from .models import UserAiModel, SeatStatsLog  # Adjust import as needed
+from zoneinfo import ZoneInfo
+
+# -------------------------------
 # Logger
+# -------------------------------
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
@@ -70,7 +87,8 @@ stats_store = defaultdict(lambda: {
     name: {"dwell": 0.0, "empty": 0.0, "empty_total": 0.0}
     for name in seats
 })
-last_ts_map = {}  # Track last_ts per (user_id, camera_id)
+last_ts_map = {}
+last_processed_date = {}
 lock = threading.Lock()
 
 # -------------------------------
@@ -112,11 +130,14 @@ def seat_status(user_id, camera_id, img, results, stats):
 # -------------------------------
 def process_camera(user_id, camera_id, rtsp_url):
     logger.info(f"🎥 Starting stream for user={user_id}, camera={camera_id}")
-
     cap = cv2.VideoCapture(rtsp_url)
     if not cap.isOpened():
         logger.warning(f"❌ Unable to open stream: {rtsp_url}")
         return
+
+    sa_tz = ZoneInfo("Asia/Riyadh")
+    shift_start = dtime(7, 0)
+    shift_end = dtime(15, 0)
 
     while True:
         ret, frame = cap.read()
@@ -124,10 +145,32 @@ def process_camera(user_id, camera_id, rtsp_url):
             logger.warning(f"⚠️ Failed to read frame from camera {camera_id}")
             break
 
+        now = datetime.now(sa_tz)
+        today = now.date()
+        current_time = now.time()
+        key = (user_id, camera_id)
+
+        # 🔄 Reset stats if new day
+        if last_processed_date.get(key) != today:
+            with lock:
+                stats_store[key] = {
+                    name: {"dwell": 0.0, "empty": 0.0, "empty_total": 0.0}
+                    for name in seats
+                }
+                last_ts_map[key] = time.time()
+                last_processed_date[key] = today
+                logger.info(f"🔄 Stats reset for user={user_id}, cam={camera_id} on {today}")
+
+        # ⏰ Skip processing if outside shift hours
+        if not (shift_start <= current_time < shift_end):
+            logger.info(f"⏱️ Outside shift hours for cam={camera_id}; sleeping...")
+            time.sleep(10)
+            continue
+
         try:
             results = model(frame)
             with lock:
-                stats = stats_store[(user_id, camera_id)]
+                stats = stats_store[key]
                 seat_status(user_id, camera_id, frame, results, stats)
         except Exception as e:
             logger.error(f"❌ Frame processing error: {e}")
@@ -148,14 +191,14 @@ def start_camera_stream(user_id, camera_id, rtsp_url):
 # -------------------------------
 @shared_task
 def save_seat_stats_to_file():
-    now = datetime.now()
+    now = datetime.now(ZoneInfo("Asia/Riyadh"))
     if not (7 <= now.hour < 15):
         logger.info("⏰ Outside active hours (07:00 - 15:00), skipping save.")
         return
 
     logger.info("📥 Saving seat stats to files...")
 
-    today = date.today()
+    today = now.date()
     base_dir = os.path.join(settings.MEDIA_ROOT, "seat_stats")
     os.makedirs(base_dir, exist_ok=True)
 
