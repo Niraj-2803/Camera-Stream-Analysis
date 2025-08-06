@@ -2,24 +2,45 @@
 from PyInstaller.utils.hooks import collect_submodules
 from PyInstaller.utils.hooks import collect_all
 
-datas = [('PPE_model.pt', '.'), ('yolov8n-pose.pt', '.'), ('fire_smoke_model.pt', '.'), ('staticfiles', 'staticfiles'), ('camera_streaming', 'camera_streaming')]
+datas = [
+    ('PPE_model.pt', '.'),
+    ('yolov8n-pose.pt', '.'),
+    ('fire_smoke_model.pt', '.'),
+    ('staticfiles', 'staticfiles'),
+    ('camera_streaming', 'camera_streaming')
+]
 binaries = []
 hiddenimports = []
+
+# Custom submodules
 hiddenimports += collect_submodules('celery')
 hiddenimports += collect_submodules('camera')
 hiddenimports += collect_submodules('camera.management.commands')
 hiddenimports += collect_submodules('rest_framework_simplejwt')
-tmp_ret = collect_all('django')
-datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
-tmp_ret = collect_all('channels')
-datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
-tmp_ret = collect_all('uvicorn')
-datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
-tmp_ret = collect_all('starlette')
-datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
-tmp_ret = collect_all('celery')
-datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
+# Django
+tmp = collect_all('django')
+datas += tmp[0]; binaries += tmp[1]; hiddenimports += tmp[2]
+
+# Channels
+tmp = collect_all('channels')
+datas += tmp[0]; binaries += tmp[1]; hiddenimports += tmp[2]
+
+# Uvicorn
+tmp = collect_all('uvicorn')
+datas += tmp[0]; binaries += tmp[1]; hiddenimports += tmp[2]
+
+# Starlette
+tmp = collect_all('starlette')
+datas += tmp[0]; binaries += tmp[1]; hiddenimports += tmp[2]
+
+# Celery again (no harm)
+tmp = collect_all('celery')
+datas += tmp[0]; binaries += tmp[1]; hiddenimports += tmp[2]
+
+# ✅ Add drf_yasg templates & dependencies
+tmp = collect_all('drf_yasg')
+datas += tmp[0]; binaries += tmp[1]; hiddenimports += tmp[2]
 
 a = Analysis(
     ['runserver.py'],

@@ -66,3 +66,17 @@ class AssignAiModelSerializer(serializers.Serializer):
 class UserCameraQuerySerializer(serializers.Serializer):
     user_id = serializers.IntegerField(required=True)
     camera_id = serializers.IntegerField(required=True)
+
+
+class UserAiModelZoneSerializer(serializers.Serializer):
+    user_id = serializers.IntegerField()
+    camera_id = serializers.IntegerField()
+    aimodel_id = serializers.IntegerField()
+    zones = serializers.DictField(
+        child=serializers.ListField(
+            child=serializers.ListField(
+                child=serializers.FloatField()
+            )
+        )
+    )
+

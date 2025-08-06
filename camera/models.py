@@ -32,11 +32,12 @@ class AiModel(models.Model):
         return self.name
 
 
-class UserAiModel(BaseModel):
+class UserAiModel(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='user')
     aimodel = models.ForeignKey(AiModel, on_delete=models.CASCADE, related_name='ai')
     camera = models.ForeignKey(Camera, on_delete=models.CASCADE, related_name='camera')
     is_active = models.BooleanField(default=False)
+    zones = models.JSONField(default=dict, blank=True, null=True)  # Add this line
 
     class Meta:
         unique_together = ('user', 'aimodel', 'camera')

@@ -2,7 +2,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, permissions
 from .models import Camera, CameraGroup, UserAiModel, AiModel
-from .serializers import AiModelSerializer, AssignAiModelSerializer, CameraGroupActionSerializer, CameraSerializer, UserAiModelSerializer, UserAiModelActionSerializer, UserCameraQuerySerializer
+from .serializers import AiModelSerializer, AssignAiModelSerializer, CameraGroupActionSerializer, CameraSerializer, UserAiModelSerializer, UserAiModelActionSerializer, UserAiModelZoneSerializer, UserCameraQuerySerializer
 from django.shortcuts import get_object_or_404
 from drf_yasg.utils import swagger_auto_schema
 from rest_framework.generics import GenericAPIView
@@ -347,3 +347,43 @@ class UserAiModelView(APIView):
 
         serialized_data = AiModelSerializer(ai_models, many=True)
         return Response(serialized_data.data, status=200)
+
+
+
+# from rest_framework.views import APIView
+# from rest_framework.response import Response
+# from rest_framework import permissions, status
+# from drf_yasg.utils import swagger_auto_schema
+
+class UserAiModelZoneView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    @swagger_auto_schema(
+        request_body=UserAiModelZoneSerializer,
+        responses={200: "Updated", 404: "Not Found", 400: "Bad Request"},
+        operation_summary="Update Zones for UserAiModel",
+        operation_description="Updates or assigns zones for an existing UserAiModel instance."
+    )
+    def post(self, request):
+        serializer = UserAiModelZoneSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        user_id = serializer.validated_data['user_id']
+        camera_id = serializer.validated_data['camera_id']
+        aimodel_id = serializer.validated_data['aimodel_id']
+        zones = serializer.validated_data['zones']
+
+        try:
+            user_aimodel = UserAiModel.objects.get(
+                user_id=user_id,
+                camera_id=camera_id,
+                aimodel_id=aimodel_id
+            )
+        except UserAiModel.DoesNotExist:
+            return Response({"detail": "UserAiModel entry not found."}, status=404)
+
+        user_aimodel.zones = zones
+        user_aimodel.save()
+
+        return Response({"detail": "Zones updated successfully."}, status=200)

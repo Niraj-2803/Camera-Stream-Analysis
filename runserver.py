@@ -24,7 +24,7 @@ os.environ["YOLO_PPE_MODEL"] = str(BASE_DIR / "PPE_model.pt")
 os.environ["YOLO_POSE_MODEL"] = str(BASE_DIR / "yolov8n-pose.pt")
 os.environ["YOLO_FIRE_SMOKE_MODEL"] = str(BASE_DIR / "fire_smoke_model.pt")
 
-# Create persistent DB directory (outside TEMP)
+# Create persistent DB directory
 PERSISTENT_DIR = os.path.expanduser("~/.camex")
 os.makedirs(PERSISTENT_DIR, exist_ok=True)
 
@@ -36,27 +36,42 @@ settings.DATABASES['default']['NAME'] = DB_PATH
 # Setup Django
 import django
 from django.core.management import call_command
+from django.db.migrations.executor import MigrationExecutor
+from django.db import connections
 
 django.setup()
 
-# Check for existing DB
-def db_exists():
-    return os.path.exists(DB_PATH)
+# Check if all migrations are applied
+def needs_migration():
+    try:
+        connection = connections['default']
+        executor = MigrationExecutor(connection)
+        targets = executor.loader.graph.leaf_nodes()
+        plan = executor.migration_plan(targets)
+        return len(plan) > 0
+    except Exception as e:
+        print(f"⚠️ Could not check migrations: {e}")
+        return True  # Safe default
+# Collect static files (important for Swagger and UI)
+try:
+    print("🗂 Collecting static files...")
+    call_command("collectstatic", interactive=False, verbosity=0)
+except Exception as e:
+    print(f"⚠️ Failed to collect static files: {e}")
 
-if not db_exists():
-    print("📦 First time setup: applying migrations...")
+if not os.path.exists(DB_PATH) or needs_migration():
+    print("📦 Applying migrations...")
     call_command("migrate", interactive=False)
 else:
-    print("✅ Using existing DB, skipping re-migration.")
+    print("✅ DB is ready. Skipping migrations.")
 
 # 👇 Force-load the custom management command (important for PyInstaller)
 import camera.management.commands.aimodel_script
 
-# Run your custom management command
 print("Running aimodel_script command...")
 call_command("aimodel_script")
 
-# Start the server
+# Start server
 print(f"Base dir: {BASE_DIR}")
 print("Starting Uvicorn server...")
 

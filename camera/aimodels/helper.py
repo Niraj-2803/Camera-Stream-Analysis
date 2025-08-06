@@ -9,6 +9,10 @@ from collections import defaultdict
 from camera.models import UserAiModel
 from shapely.geometry import Polygon, Point
 
+import time
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 # Setup logger
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
@@ -18,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 import os
 import sys
+
 
 def resource_path(relative_path):
     """
@@ -171,9 +176,8 @@ def process_video_stream(
     print(f"✅ Video saved to: {output_path}")
 
 
-
 # _________________________________________________________________________________________________________________________________________
-# Track Posture 
+# Track Posture
 
 # pose_model = YOLO("yolov8n-pose.pt")  # Use yolov8n-pose.pt for speed
 pose_model = YOLO(resource_path("yolov8n-pose.pt"))
@@ -315,12 +319,20 @@ def draw_seats(img, poly_map, stats):
             font_scale=0.6,
             txt_color=(255, 0, 0),
             bg_color=(0, 0, 0),
-            thickness=2
+            thickness=2,
         )
 
 
-def draw_label(img, text, org, font=cv2.FONT_HERSHEY_SIMPLEX,
-               font_scale=0.6, txt_color=(255, 0, 0), bg_color=(0, 0, 0), thickness=2):
+def draw_label(
+    img,
+    text,
+    org,
+    font=cv2.FONT_HERSHEY_SIMPLEX,
+    font_scale=0.6,
+    txt_color=(255, 0, 0),
+    bg_color=(0, 0, 0),
+    thickness=2,
+):
     """
     Draw text with a solid background.
     """
@@ -328,15 +340,18 @@ def draw_label(img, text, org, font=cv2.FONT_HERSHEY_SIMPLEX,
     x, y = org
     pad = 2
 
-    cv2.rectangle(img, (x - pad, y - h - pad), (x + w + pad, y + base + pad), bg_color, -1)
+    cv2.rectangle(
+        img, (x - pad, y - h - pad), (x + w + pad, y + base + pad), bg_color, -1
+    )
     cv2.putText(img, text, org, font, font_scale, txt_color, thickness)
 
-# _________________________________________________________________________________________________________________________________________
-
-
 
 # _________________________________________________________________________________________________________________________________________
-# Blur faces 
+
+
+# _________________________________________________________________________________________________________________________________________
+# Blur faces
+
 
 def blur_faces(frame, results):
     logger.info("Starting face blurring process.")
@@ -400,11 +415,12 @@ def blur_faces(frame, results):
     logger.info(f"Finished processing. Total faces blurred: {num_faces_blurred}")
     return frame
 
+
 # _________________________________________________________________________________________________________________________________________
 
 
 # _________________________________________________________________________________________________________________________________________
-# Count People 
+# Count People
 
 # Keep track of the last time count was logged
 last_count_log_time = 0  # global or pass into function if needed
@@ -474,11 +490,12 @@ def count_people(frame, results):
 
     return frame
 
-# _________________________________________________________________________________________________________________________________________
 
 # _________________________________________________________________________________________________________________________________________
 
-# SEAT Status 
+# _________________________________________________________________________________________________________________________________________
+
+# SEAT Status
 
 seats = {
     "seat_1": [(343.2, 368.9), (507.3, 275.4), (431.7, 157.4), (235.5, 222.8)],
@@ -505,42 +522,55 @@ stats = {name: {"dwell": 0.0, "empty": 0.0, "empty_total": 0.0} for name in seat
 # Timing variable (initialized on first call)
 last_ts = None
 
-def seat_status(img, results):
-    """
-    Update and draw seat occupancy stats using real elapsed time between calls.
-    """
+from shapely.geometry import Polygon
+import numpy as np
+
+def get_seat_polygons_from_model(user_id, camera_id):
+    try:
+        user_aimodel = UserAiModel.objects.filter(
+            user_id=user_id,
+            camera_id=camera_id,
+            aimodel__function_name="seat_status",  # Ensure it's the correct model
+            is_active=True
+        ).first()
+        if not user_aimodel or not user_aimodel.zones:
+            print("❌ No zone data found.")
+            return {}, {}, {}
+        
+        seats = user_aimodel.zones
+
+        # Convert JSON-safe lists to required formats
+        poly_map = {name: Polygon(pts) for name, pts in seats.items()}
+        poly_int = {name: np.array(pts, np.int32) for name, pts in seats.items()}
+        stats = {name: {"dwell": 0.0, "empty": 0.0, "empty_total": 0.0} for name in seats}
+
+        return poly_map, poly_int, stats
+
+    except Exception as e:
+        print(f"❌ Error retrieving seats: {e}")
+        return {}, {}, {}
+
+
+def seat_status(img, results, poly_map, poly_int, stats):
     global last_ts
     now = time.time()
-    # Compute delta-time since last frame
-    if last_ts is None:
-        dt = 0.0
-    else:
-        dt = now - last_ts
+    dt = 0.0 if last_ts is None else now - last_ts
     last_ts = now
 
-    # Panel metrics (for overlay)
+    # Draw panel
     panel_x, panel_y = 10, 40
     line_h = 20
     panel_w = 280
-    panel_h = line_h * len(seats) + 10
+    panel_h = line_h * len(poly_map) + 10
+    cv2.rectangle(img, (panel_x, panel_y), (panel_x + panel_w, panel_y + panel_h), (0, 0, 0), -1)
 
-    # Draw panel background once per frame
-    cv2.rectangle(
-        img, (panel_x, panel_y), (panel_x + panel_w, panel_y + panel_h), (0, 0, 0), -1
-    )
-
-    # Extract detection boxes and compute centers
     result = results[0]
-    boxes = (
-        result.boxes.xyxy.cpu().numpy()
-        if result.boxes is not None
-        else np.empty((0, 4))
-    )
+    boxes = result.boxes.xyxy.cpu().numpy() if result.boxes is not None else np.empty((0, 4))
     centers = [((x1 + x2) / 2, (y1 + y2) / 2) for x1, y1, x2, y2 in boxes]
+
     for cx, cy in centers:
         cv2.circle(img, (int(cx), int(cy)), radius=5, color=(0, 0, 255), thickness=-1)
 
-    # Update stats per seat
     for i, (name, poly) in enumerate(poly_map.items()):
         occupied = any(poly.contains(Point(x, y)) for x, y in centers)
 
@@ -551,30 +581,90 @@ def seat_status(img, results):
             stats[name]["empty"] += dt
             stats[name]["empty_total"] += dt
 
-        # Draw seat polygon
         cv2.polylines(img, [poly_int[name]], True, (255, 0, 0), 2)
-
-        # Draw labels at centroid
         cx, cy = map(int, poly.centroid.coords[0])
         draw_label_seat_status(img, f"{name} dwell: {stats[name]['dwell']:.1f}s", (cx - 40, cy + 6))
-        draw_label_seat_status(
-            img, f"{name} empty: {stats[name]['empty']:.1f}s", (cx - 40, cy - 20)
-        )
+        draw_label_seat_status(img, f"{name} empty: {stats[name]['empty']:.1f}s", (cx - 40, cy - 20))
 
-        # Overlay total-empty stats on panel
         y = panel_y + (i + 1) * line_h
-        cv2.putText(
-            img,
-            f"{name}: total empty {stats[name]['empty_total']:.1f}s",
-            (panel_x + 5, y),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.6,
-            (0, 255, 0),
-            2,
-        )
-        print(stats)
+        cv2.putText(img, f"{name}: total empty {stats[name]['empty_total']:.1f}s",
+                    (panel_x + 5, y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
     return img
+
+
+# def seat_status(img, results):
+#     """
+#     Update and draw seat occupancy stats using real elapsed time between calls.
+#     """
+#     global last_ts
+#     now = time.time()
+#     # Compute delta-time since last frame
+#     if last_ts is None:
+#         dt = 0.0
+#     else:
+#         dt = now - last_ts
+#     last_ts = now
+
+#     # Panel metrics (for overlay)
+#     panel_x, panel_y = 10, 40
+#     line_h = 20
+#     panel_w = 280
+#     panel_h = line_h * len(seats) + 10
+
+#     # Draw panel background once per frame
+#     cv2.rectangle(
+#         img, (panel_x, panel_y), (panel_x + panel_w, panel_y + panel_h), (0, 0, 0), -1
+#     )
+
+#     # Extract detection boxes and compute centers
+#     result = results[0]
+#     boxes = (
+#         result.boxes.xyxy.cpu().numpy()
+#         if result.boxes is not None
+#         else np.empty((0, 4))
+#     )
+#     centers = [((x1 + x2) / 2, (y1 + y2) / 2) for x1, y1, x2, y2 in boxes]
+#     for cx, cy in centers:
+#         cv2.circle(img, (int(cx), int(cy)), radius=5, color=(0, 0, 255), thickness=-1)
+
+#     # Update stats per seat
+#     for i, (name, poly) in enumerate(poly_map.items()):
+#         occupied = any(poly.contains(Point(x, y)) for x, y in centers)
+
+#         if occupied:
+#             stats[name]["dwell"] += dt
+#             stats[name]["empty"] = 0.0
+#         else:
+#             stats[name]["empty"] += dt
+#             stats[name]["empty_total"] += dt
+
+#         # Draw seat polygon
+#         cv2.polylines(img, [poly_int[name]], True, (255, 0, 0), 2)
+
+#         # Draw labels at centroid
+#         cx, cy = map(int, poly.centroid.coords[0])
+#         draw_label_seat_status(
+#             img, f"{name} dwell: {stats[name]['dwell']:.1f}s", (cx - 40, cy + 6)
+#         )
+#         draw_label_seat_status(
+#             img, f"{name} empty: {stats[name]['empty']:.1f}s", (cx - 40, cy - 20)
+#         )
+
+#         # Overlay total-empty stats on panel
+#         y = panel_y + (i + 1) * line_h
+#         cv2.putText(
+#             img,
+#             f"{name}: total empty {stats[name]['empty_total']:.1f}s",
+#             (panel_x + 5, y),
+#             cv2.FONT_HERSHEY_SIMPLEX,
+#             0.6,
+#             (0, 255, 0),
+#             2,
+#         )
+#         print(stats)
+
+#     return img
 
 
 def draw_label_seat_status(
@@ -595,63 +685,34 @@ def draw_label_seat_status(
     )
     cv2.putText(img, text, org, font, font_scale, txt_color, thickness)
 
-    
+
 # _________________________________________________________________________________________________________________________________________
 
+# In/Out count
 
-# REGION        = [(10, 400), (1000, 400)]
-# CLASSES       = [0]
-# SHOW_WINDOW   = False
-# def count_objects(frame, counter):
-#     results = counter.process(frame)
-#     img = results.plot_im
-#     counter.display_counts(img)
-#     draw_label(img, f"Total IN: {counter.in_count}", (90, 30))
-#     draw_label(img, f"Total OUT: {counter.out_count}", (90, 60))
-#     return img
 
-# def main():
-#     # Initialize counter
-#     counter = solutions.ObjectCounter(
-#         model=MODEL_PATH,
-#         region=REGION,
-#         classes=[0]
-#     )
+REGION = [(1394, 1073), (1662, 650)]
 
-#     cap = cv2.VideoCapture(VIDEO_SOURCE)
-#     if not cap.isOpened():
-#         raise IOError(f"Cannot open video source {VIDEO_SOURCE}")
+MODEL_PATH = "yolo11n.pt"
+counter = solutions.ObjectCounter(
+    model=MODEL_PATH, region=REGION, classes=[0], show_in=False, show_out=False
+)
 
-#     # ——— HERE: fetch frame properties before creating writer ———
-#     w   = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-#     h   = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-#     fps = cap.get(cv2.CAP_PROP_FPS) or 30
-#     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-#     writer = cv2.VideoWriter(OUTPUT_PATH, fourcc, fps, (w, h))
-#     # ————————————————————————————————————————————————————————
 
-#     print("Starting object counting…")
-
-#     try:
-#         while True:
-#             ret, frame = cap.read()
-#             if not ret:
-#                 break
-
-#             annotated = count_objects(frame, counter)
-#             writer.write(annotated)
-
-#             if SHOW_WINDOW:
-#                 cv2.imshow("Object Counting", annotated)
-#                 if cv2.waitKey(1) & 0xFF == ord('q'):
-#                     break
-#     finally:
-#         cap.release()
-#         writer.release()
-#         if SHOW_WINDOW:
-#             cv2.destroyAllWindows()
-
-#     print(f"Finished. Output saved to {OUTPUT_PATH}")
+def in_out_count_people(frame, counter):
+    results = counter.process(frame)
+    img = results.plot_im
+    counter.display_counts(img)
+    draw_label(img, f"Total IN: {counter.in_count}", (90, 30))
+    draw_label(img, f"Total OUT: {counter.out_count}", (90, 60))
+    now = datetime.now(ZoneInfo("Asia/Riyadh")).strftime("%Y-%m-%dT%H:%M:%S%z")
+    in_out_stat = {
+        "real_soudi_time": now,
+        "in_count": counter.in_count,
+        "out_count": counter.out_count,
+    }
+    print(in_out_stat)
+    return img
 
 
 # _________________________________________________________________________________________________________________________________________
@@ -687,13 +748,14 @@ FIRE_SMOKE_model = YOLO(resource_path("fire_smoke_model.pt"))
 
 def fire_smoke_detection(frame, boxes):
     model = FIRE_SMOKE_model
-    results = model.predict(frame,)
+    results = model.predict(
+        frame,
+    )
     annotated = results[0].plot()
     return annotated
 
+
 # _________________________________________________________________________________________________________________________________________
-
-
 
 
 # _________________________________________________________________________________________________________________________________________
@@ -722,50 +784,44 @@ def execute_user_ai_models(
             "generate_people_heatmap": generate_people_heatmap,
             "track_posture_and_occupancy": track_posture_and_occupancy,
             "seat_status": seat_status,
-            "fire_smoke_detction":fire_smoke_detection,
-            "ppe_detection":ppe_detection
+            "in_out_count_people": in_out_count_people,
+            "fire_smoke_detction": fire_smoke_detection,
+            "ppe_detection": ppe_detection,
         }
 
-        if function_name in function_map:
-            function_to_execute = function_map[function_name]
-            print(
-                f"Executing {function_name} for user {user_id} and camera {camera_id}."
-            )
-
-            # if function_name == "track_posture_and_occupancy":
-            #     if not rtsp_url:
-            #         print("❌ RTSP URL is required for posture tracking.")
-            #         continue
-            #     try:
-            #         result = function_to_execute(
-            #             model="yolo11m-pose.pt",
-            #             source=rtsp_url,
-            #             output_path="output_video.mp4",
-            #             stats_file='stats.json',
-            #             show=True
-            #         )
-            #         if save_to_json:
-            #             save_sample_data_to_json(user_id, camera_id, result)
-            #     except Exception as e:
-            #         print(f"❌ Error during posture tracking execution: {e}")
-            # else:
-            try:
-                model = YOLO(resource_path("yolo11n-pose.pt"))
-
-                # Read image
-                # frame = cv2.imread(r'D:\All projects\Camex\image.png')
-
-                # Run pose inference
-                results = model(frame)
-                boxes = []  # Replace with real boxes if needed
-                if results:
-                    boxes = results
-                processed_frame = function_to_execute(frame, boxes)
-                print(f"Processed frame using {function_name}.")
-            except Exception as e:
-                print(f"❌ Error during {function_name} execution: {e}")
-        else:
+        if function_name not in function_map:
             print(f"❌ No function found for AiModel {function_name}.")
+            continue
+
+        function_to_execute = function_map[function_name]
+        print(f"Executing {function_name} for user {user_id} and camera {camera_id}.")
+
+        try:
+            model = YOLO(resource_path("yolo11n-pose.pt"))
+            results = model(frame)
+
+            if not results:
+                print(f"⚠️ No results from YOLO model for {function_name}")
+                continue
+
+            # Handle seat_status specifically
+            if function_name == "seat_status":
+                poly_map, poly_int, stats = get_seat_polygons_from_model(user_id, camera_id)
+                if not poly_map:
+                    print("⚠️ No seat zones configured.")
+                    return
+                model = YOLO(resource_path("yolo11n-pose.pt"))
+                results = model(frame)
+                if results:
+                    processed_frame = seat_status(frame, results, poly_map, poly_int, stats)
+            else:
+                processed_frame = function_to_execute(frame, results)
+
+
+            print(f"✅ Processed frame using {function_name}.")
+
+        except Exception as e:
+            print(f"❌ Error during {function_name} execution: {e}")
 
 
 def save_sample_data_to_json(user_id, camera_id, frame):

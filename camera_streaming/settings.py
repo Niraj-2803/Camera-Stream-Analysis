@@ -56,6 +56,7 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    # 'camera.middleware.trial_expiry_middleware',
     'corsheaders.middleware.CorsMiddleware',  # 🔥 add this FIRST
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',

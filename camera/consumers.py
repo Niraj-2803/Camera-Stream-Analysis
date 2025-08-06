@@ -4,98 +4,18 @@ import threading
 import time
 import os
 from channels.generic.websocket import WebsocketConsumer
-
+import json
+from pathlib import Path
+from datetime import timedelta, datetime
+from channels.generic.websocket import WebsocketConsumer
+from django.conf import settings
+from urllib.parse import parse_qs
 from camera.aimodels.helper import *
 from .models import Camera
 
 # Configure logging to output to stdout, which is captured by Gunicorn
 logging.basicConfig(level=logging.DEBUG)  # Change level to DEBUG, INFO, etc. based on your needs
 logger = logging.getLogger(__name__)
-
-# class CameraStreamConsumer(WebsocketConsumer):
-#     def connect(self):
-#         self.camera_id = self.scope["url_route"]["kwargs"]["camera_id"]
-#         self.accept()
-#         self.streaming = True
-#         threading.Thread(target=self.stream_video, daemon=True).start()
-
-#     def disconnect(self, close_code):
-#         self.streaming = False
-
-#     def build_rtsp_url(self, cam):
-#         if "@" in cam.rtsp_url:
-#             return cam.rtsp_url
-
-#         if cam.username and cam.password:
-#             parts = cam.rtsp_url.split("://")
-#             if len(parts) == 2:
-#                 protocol, rest = parts
-#                 return f"{protocol}://{cam.username}:{cam.password}@{rest}"
-#         return cam.rtsp_url
-
-#     def send_fallback_frame(self):
-#         # Load fallback image only once
-#         fallback_path = os.path.join(os.path.dirname(__file__), 'no_frame.jpg')
-#         fallback_img = cv2.imread(fallback_path)
-
-#         if fallback_img is not None:
-#             _, self.fallback_buffer = cv2.imencode('.jpg', fallback_img)
-#             self.send(bytes_data=self.fallback_buffer.tobytes())
-#         else:
-#             self.fallback_buffer = None
-#             logger.error("no_frame.jpg not found. Sending empty frame.")
-#             self.send(bytes_data=b'')  # Send empty frame if no_frame.jpg is missing
-
-#     def stream_video(self):
-#         try:
-#             cam = Camera.objects.get(id=self.camera_id)
-#         except Camera.DoesNotExist:
-#             self.close()
-#             return
-
-#         rtsp_url = self.build_rtsp_url(cam)
-
-#         # Log the RTSP URL to stdout (which will be captured by Gunicorn)
-#         logger.info(f"Connecting to camera stream: {rtsp_url}")
-
-#         while self.streaming:
-#             cap = cv2.VideoCapture(rtsp_url)
-#             cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-#             cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-#             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 360)
-#             cap.set(cv2.CAP_PROP_FPS, 30)
-
-#             if not cap.isOpened():
-#                 logger.warning("Could not open RTSP stream. Retrying in 5 seconds...")
-#                 self.send_fallback_frame()  # Send fallback image when stream is unavailable
-#                 time.sleep(5)
-#                 continue
-
-#             logger.info("Stream opened successfully.")
-
-#             while self.streaming and cap.isOpened():
-#                 for _ in range(3):  # Discard a few frames to ensure we don't send old frames
-#                     cap.grab()
-
-#                 success, frame = cap.read()
-#                 if not success:
-#                     logger.error("Failed to read frame from stream. Sending fallback image.")
-#                     self.send_fallback_frame()  # Send fallback image if no frame is read
-#                     time.sleep(0.01)  # Avoid tight loop, small delay before retrying
-#                     continue
-
-#                 try:
-#                     _, buffer = cv2.imencode('.jpg', frame)
-#                     self.send(bytes_data=buffer.tobytes())
-#                 except Exception as e:
-#                     logger.exception("Failed to send frame:")
-#                     break
-
-#                 time.sleep(0.01)  # Control frame rate (100 fps limit here)
-
-#             cap.release()
-#             logger.info("Stream released. Reconnecting in 5 seconds...")
-#             time.sleep(5)  # Wait before trying to reconnect
 
 
 class CameraStreamConsumer(WebsocketConsumer):
@@ -219,21 +139,6 @@ class CameraStreamConsumer(WebsocketConsumer):
 
         self._stream_camera(rtsp_url, process_frame_callback)
 
-import json
-import threading
-import time
-from pathlib import Path
-from datetime import timedelta, datetime
-from channels.generic.websocket import WebsocketConsumer
-
-
-import json
-import threading
-import time
-from pathlib import Path
-from datetime import timedelta, datetime
-from urllib.parse import parse_qs
-from channels.generic.websocket import WebsocketConsumer
 
 class AnalyticsStreamConsumer(WebsocketConsumer):
     def connect(self):
@@ -360,15 +265,6 @@ class AnalyticsStreamConsumer(WebsocketConsumer):
             time.sleep(10)
 
 
-
-from channels.generic.websocket import WebsocketConsumer
-from datetime import datetime, timedelta
-from pathlib import Path
-from django.conf import settings
-import threading
-import time
-import json
-from urllib.parse import parse_qs
 
 class LiveSeatStatsConsumer(WebsocketConsumer):
     def connect(self):

@@ -10,6 +10,5 @@ urlpatterns = [
     path('dashboard/', camera_dashboard, name='camera-dashboard'),
     path('api/ai-models/', CreateAiModelView.as_view(), name='create-ai-model'),
     path('user-aimodels/', UserAiModelView.as_view(), name='user-aimodels'),
-
-
+    path('user-aimodels/zones/', UserAiModelZoneView.as_view(), name='user-aimodels-zones'),
 ]
