@@ -551,84 +551,26 @@ def get_seat_polygons_from_model(user_id, camera_id):
         return {}, {}, {}
 
 
-def seat_status(img, results, poly_map, poly_int, stats):
-    global last_ts
-    now = time.time()
-    dt = 0.0 if last_ts is None else now - last_ts
-    last_ts = now
-
-    # Draw panel
-    panel_x, panel_y = 10, 40
-    line_h = 20
-    panel_w = 280
-    panel_h = line_h * len(poly_map) + 10
-    cv2.rectangle(img, (panel_x, panel_y), (panel_x + panel_w, panel_y + panel_h), (0, 0, 0), -1)
-
-    result = results[0]
-    boxes = result.boxes.xyxy.cpu().numpy() if result.boxes is not None else np.empty((0, 4))
-    centers = [((x1 + x2) / 2, (y1 + y2) / 2) for x1, y1, x2, y2 in boxes]
-
-    for cx, cy in centers:
-        cv2.circle(img, (int(cx), int(cy)), radius=5, color=(0, 0, 255), thickness=-1)
-
-    for i, (name, poly) in enumerate(poly_map.items()):
-        occupied = any(poly.contains(Point(x, y)) for x, y in centers)
-
-        if occupied:
-            stats[name]["dwell"] += dt
-            stats[name]["empty"] = 0.0
-        else:
-            stats[name]["empty"] += dt
-            stats[name]["empty_total"] += dt
-
-        cv2.polylines(img, [poly_int[name]], True, (255, 0, 0), 2)
-        cx, cy = map(int, poly.centroid.coords[0])
-        draw_label_seat_status(img, f"{name} dwell: {stats[name]['dwell']:.1f}s", (cx - 40, cy + 6))
-        draw_label_seat_status(img, f"{name} empty: {stats[name]['empty']:.1f}s", (cx - 40, cy - 20))
-
-        y = panel_y + (i + 1) * line_h
-        cv2.putText(img, f"{name}: total empty {stats[name]['empty_total']:.1f}s",
-                    (panel_x + 5, y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-
-    return img
-
-
-# def seat_status(img, results):
-#     """
-#     Update and draw seat occupancy stats using real elapsed time between calls.
-#     """
+# def seat_status(img, results, poly_map, poly_int, stats):
 #     global last_ts
 #     now = time.time()
-#     # Compute delta-time since last frame
-#     if last_ts is None:
-#         dt = 0.0
-#     else:
-#         dt = now - last_ts
+#     dt = 0.0 if last_ts is None else now - last_ts
 #     last_ts = now
 
-#     # Panel metrics (for overlay)
+#     # Draw panel
 #     panel_x, panel_y = 10, 40
 #     line_h = 20
 #     panel_w = 280
-#     panel_h = line_h * len(seats) + 10
+#     panel_h = line_h * len(poly_map) + 10
+#     cv2.rectangle(img, (panel_x, panel_y), (panel_x + panel_w, panel_y + panel_h), (0, 0, 0), -1)
 
-#     # Draw panel background once per frame
-#     cv2.rectangle(
-#         img, (panel_x, panel_y), (panel_x + panel_w, panel_y + panel_h), (0, 0, 0), -1
-#     )
-
-#     # Extract detection boxes and compute centers
 #     result = results[0]
-#     boxes = (
-#         result.boxes.xyxy.cpu().numpy()
-#         if result.boxes is not None
-#         else np.empty((0, 4))
-#     )
+#     boxes = result.boxes.xyxy.cpu().numpy() if result.boxes is not None else np.empty((0, 4))
 #     centers = [((x1 + x2) / 2, (y1 + y2) / 2) for x1, y1, x2, y2 in boxes]
+
 #     for cx, cy in centers:
 #         cv2.circle(img, (int(cx), int(cy)), radius=5, color=(0, 0, 255), thickness=-1)
 
-#     # Update stats per seat
 #     for i, (name, poly) in enumerate(poly_map.items()):
 #         occupied = any(poly.contains(Point(x, y)) for x, y in centers)
 
@@ -639,32 +581,90 @@ def seat_status(img, results, poly_map, poly_int, stats):
 #             stats[name]["empty"] += dt
 #             stats[name]["empty_total"] += dt
 
-#         # Draw seat polygon
 #         cv2.polylines(img, [poly_int[name]], True, (255, 0, 0), 2)
-
-#         # Draw labels at centroid
 #         cx, cy = map(int, poly.centroid.coords[0])
-#         draw_label_seat_status(
-#             img, f"{name} dwell: {stats[name]['dwell']:.1f}s", (cx - 40, cy + 6)
-#         )
-#         draw_label_seat_status(
-#             img, f"{name} empty: {stats[name]['empty']:.1f}s", (cx - 40, cy - 20)
-#         )
+#         draw_label_seat_status(img, f"{name} dwell: {stats[name]['dwell']:.1f}s", (cx - 40, cy + 6))
+#         draw_label_seat_status(img, f"{name} empty: {stats[name]['empty']:.1f}s", (cx - 40, cy - 20))
 
-#         # Overlay total-empty stats on panel
 #         y = panel_y + (i + 1) * line_h
-#         cv2.putText(
-#             img,
-#             f"{name}: total empty {stats[name]['empty_total']:.1f}s",
-#             (panel_x + 5, y),
-#             cv2.FONT_HERSHEY_SIMPLEX,
-#             0.6,
-#             (0, 255, 0),
-#             2,
-#         )
-#         print(stats)
+#         cv2.putText(img, f"{name}: total empty {stats[name]['empty_total']:.1f}s",
+#                     (panel_x + 5, y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
 #     return img
+
+
+def seat_status(img, results, poly_map, poly_int, stats):
+    """
+    Update and draw seat occupancy stats using real elapsed time between calls.
+    """
+    global last_ts
+    now = time.time()
+    # Compute delta-time since last frame
+    if last_ts is None:
+        dt = 0.0
+    else:
+        dt = now - last_ts
+    last_ts = now
+
+    # Panel metrics (for overlay)
+    panel_x, panel_y = 10, 40
+    line_h = 20
+    panel_w = 280
+    panel_h = line_h * len(seats) + 10
+
+    # Draw panel background once per frame
+    cv2.rectangle(
+        img, (panel_x, panel_y), (panel_x + panel_w, panel_y + panel_h), (0, 0, 0), -1
+    )
+
+    # Extract detection boxes and compute centers
+    result = results[0]
+    boxes = (
+        result.boxes.xyxy.cpu().numpy()
+        if result.boxes is not None
+        else np.empty((0, 4))
+    )
+    centers = [((x1 + x2) / 2, (y1 + y2) / 2) for x1, y1, x2, y2 in boxes]
+    for cx, cy in centers:
+        cv2.circle(img, (int(cx), int(cy)), radius=5, color=(0, 0, 255), thickness=-1)
+
+    # Update stats per seat
+    for i, (name, poly) in enumerate(poly_map.items()):
+        occupied = any(poly.contains(Point(x, y)) for x, y in centers)
+
+        if occupied:
+            stats[name]["dwell"] += dt
+            stats[name]["empty"] = 0.0
+        else:
+            stats[name]["empty"] += dt
+            stats[name]["empty_total"] += dt
+
+        # Draw seat polygon
+        cv2.polylines(img, [poly_int[name]], True, (255, 0, 0), 2)
+
+        # Draw labels at centroid
+        cx, cy = map(int, poly.centroid.coords[0])
+        draw_label_seat_status(
+            img, f"{name} dwell: {stats[name]['dwell']:.1f}s", (cx - 40, cy + 6)
+        )
+        draw_label_seat_status(
+            img, f"{name} empty: {stats[name]['empty']:.1f}s", (cx - 40, cy - 20)
+        )
+
+        # Overlay total-empty stats on panel
+        y = panel_y + (i + 1) * line_h
+        cv2.putText(
+            img,
+            f"{name}: total empty {stats[name]['empty_total']:.1f}s",
+            (panel_x + 5, y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (0, 255, 0),
+            2,
+        )
+        print(stats)
+
+    return img
 
 
 def draw_label_seat_status(
