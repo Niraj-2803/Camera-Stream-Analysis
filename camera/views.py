@@ -2,7 +2,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, permissions
 from .models import Camera, CameraGroup, UserAiModel, AiModel
-from .serializers import AiModelSerializer, AssignAiModelSerializer, CameraGroupActionSerializer, CameraSerializer, UserAiModelSerializer, UserAiModelActionSerializer, UserAiModelZoneSerializer, UserCameraQuerySerializer
+from .serializers import AiModelSerializer, AssignAiModelSerializer, CameraGroupActionSerializer, CameraSerializer, UserAiModelSerializer, UserAiModelActionSerializer, UserAiModelZoneQuerySerializer, UserAiModelZoneSerializer, UserCameraQuerySerializer
 from django.shortcuts import get_object_or_404
 from drf_yasg.utils import swagger_auto_schema
 from rest_framework.generics import GenericAPIView
@@ -387,3 +387,29 @@ class UserAiModelZoneView(APIView):
         user_aimodel.save()
 
         return Response({"detail": "Zones updated successfully."}, status=200)
+
+    @swagger_auto_schema(
+        query_serializer=UserAiModelZoneQuerySerializer,
+        responses={200: "Zones Retrieved", 404: "Not Found", 400: "Bad Request"},
+        operation_summary="Get Zones for UserAiModel",
+        operation_description="Retrieves zones stored for the specified User, Camera, and AiModel."
+    )
+    def get(self, request):
+        serializer = UserAiModelZoneQuerySerializer(data=request.query_params)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=400)
+
+        user_id = serializer.validated_data['user_id']
+        camera_id = serializer.validated_data['camera_id']
+        aimodel_id = serializer.validated_data['aimodel_id']
+
+        try:
+            user_aimodel = UserAiModel.objects.get(
+                user_id=user_id,
+                camera_id=camera_id,
+                aimodel_id=aimodel_id
+            )
+        except UserAiModel.DoesNotExist:
+            return Response({"detail": "UserAiModel entry not found."}, status=404)
+
+        return Response({"zones": user_aimodel.zones or {}}, status=200)

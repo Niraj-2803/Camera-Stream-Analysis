@@ -80,3 +80,7 @@ class UserAiModelZoneSerializer(serializers.Serializer):
         )
     )
 
+class UserAiModelZoneQuerySerializer(serializers.Serializer):
+    user_id = serializers.IntegerField()
+    camera_id = serializers.IntegerField()
+    aimodel_id = serializers.IntegerField()
