@@ -62,3 +62,12 @@ coverage.xml
 
 
 migrations
+
+
+# PyInstaller build folders
+dist/
+build/
+*.spec
+
+# Executables
+*.exe
