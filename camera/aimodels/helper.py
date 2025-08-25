@@ -2,7 +2,9 @@ import cv2
 import time
 import json
 import logging
+from django.conf import settings
 import numpy as np
+import pytz
 from ultralytics import YOLO
 from ultralytics import solutions
 from collections import defaultdict
@@ -13,6 +15,8 @@ import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+from camera.tasks import update_in_out_stats
+
 # Setup logger
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
@@ -22,6 +26,10 @@ logger = logging.getLogger(__name__)
 
 import os
 import sys
+from collections import defaultdict
+from ultralytics.solutions.solutions import BaseSolution, SolutionAnnotator, SolutionResults
+
+zone_counters = defaultdict(dict)
 
 
 def resource_path(relative_path):
@@ -328,10 +336,10 @@ def draw_label(
     text,
     org,
     font=cv2.FONT_HERSHEY_SIMPLEX,
-    font_scale=0.6,
+    font_scale=0.4,
     txt_color=(255, 0, 0),
     bg_color=(0, 0, 0),
-    thickness=2,
+    thickness=1,
 ):
     """
     Draw text with a solid background.
@@ -525,24 +533,28 @@ last_ts = None
 from shapely.geometry import Polygon
 import numpy as np
 
-def get_seat_polygons_from_model(user_id, camera_id):
+
+def get_seat_polygons_from_model(user_id, camera_id, frame_width, frame_height):
     try:
         user_aimodel = UserAiModel.objects.filter(
             user_id=user_id,
             camera_id=camera_id,
-            aimodel__function_name="seat_status",  # Ensure it's the correct model
-            is_active=True
+            aimodel__function_name="seat_status",
+            is_active=True,
         ).first()
         if not user_aimodel or not user_aimodel.zones:
             print("❌ No zone data found.")
             return {}, {}, {}
-        
-        seats = user_aimodel.zones
 
-        # Convert JSON-safe lists to required formats
-        poly_map = {name: Polygon(pts) for name, pts in seats.items()}
-        poly_int = {name: np.array(pts, np.int32) for name, pts in seats.items()}
-        stats = {name: {"dwell": 0.0, "empty": 0.0, "empty_total": 0.0} for name in seats}
+        # Normalize (convert % → pixels)
+        zones = _extract_region(user_aimodel.zones, REGION, frame_width, frame_height)
+
+        poly_map = {name: Polygon(pts) for name, pts in zones.items()}
+        poly_int = {name: np.array(pts, np.int32) for name, pts in zones.items()}
+        stats = {
+            name: {"dwell": 0.0, "empty": 0.0, "empty_total": 0.0}
+            for name in zones
+        }
 
         return poly_map, poly_int, stats
 
@@ -551,73 +563,21 @@ def get_seat_polygons_from_model(user_id, camera_id):
         return {}, {}, {}
 
 
-# def seat_status(img, results, poly_map, poly_int, stats):
-#     global last_ts
-#     now = time.time()
-#     dt = 0.0 if last_ts is None else now - last_ts
-#     last_ts = now
-
-#     # Draw panel
-#     panel_x, panel_y = 10, 40
-#     line_h = 20
-#     panel_w = 280
-#     panel_h = line_h * len(poly_map) + 10
-#     cv2.rectangle(img, (panel_x, panel_y), (panel_x + panel_w, panel_y + panel_h), (0, 0, 0), -1)
-
-#     result = results[0]
-#     boxes = result.boxes.xyxy.cpu().numpy() if result.boxes is not None else np.empty((0, 4))
-#     centers = [((x1 + x2) / 2, (y1 + y2) / 2) for x1, y1, x2, y2 in boxes]
-
-#     for cx, cy in centers:
-#         cv2.circle(img, (int(cx), int(cy)), radius=5, color=(0, 0, 255), thickness=-1)
-
-#     for i, (name, poly) in enumerate(poly_map.items()):
-#         occupied = any(poly.contains(Point(x, y)) for x, y in centers)
-
-#         if occupied:
-#             stats[name]["dwell"] += dt
-#             stats[name]["empty"] = 0.0
-#         else:
-#             stats[name]["empty"] += dt
-#             stats[name]["empty_total"] += dt
-
-#         cv2.polylines(img, [poly_int[name]], True, (255, 0, 0), 2)
-#         cx, cy = map(int, poly.centroid.coords[0])
-#         draw_label_seat_status(img, f"{name} dwell: {stats[name]['dwell']:.1f}s", (cx - 40, cy + 6))
-#         draw_label_seat_status(img, f"{name} empty: {stats[name]['empty']:.1f}s", (cx - 40, cy - 20))
-
-#         y = panel_y + (i + 1) * line_h
-#         cv2.putText(img, f"{name}: total empty {stats[name]['empty_total']:.1f}s",
-#                     (panel_x + 5, y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-
-#     return img
-
-
 def seat_status(img, results, poly_map, poly_int, stats):
-    """
-    Update and draw seat occupancy stats using real elapsed time between calls.
-    """
     global last_ts
     now = time.time()
-    # Compute delta-time since last frame
-    if last_ts is None:
-        dt = 0.0
-    else:
-        dt = now - last_ts
+    dt = 0.0 if last_ts is None else now - last_ts
     last_ts = now
 
-    # Panel metrics (for overlay)
+    # Draw panel
     panel_x, panel_y = 10, 40
     line_h = 20
     panel_w = 280
-    panel_h = line_h * len(seats) + 10
-
-    # Draw panel background once per frame
+    panel_h = line_h * len(poly_map) + 10
     cv2.rectangle(
         img, (panel_x, panel_y), (panel_x + panel_w, panel_y + panel_h), (0, 0, 0), -1
     )
 
-    # Extract detection boxes and compute centers
     result = results[0]
     boxes = (
         result.boxes.xyxy.cpu().numpy()
@@ -625,10 +585,10 @@ def seat_status(img, results, poly_map, poly_int, stats):
         else np.empty((0, 4))
     )
     centers = [((x1 + x2) / 2, (y1 + y2) / 2) for x1, y1, x2, y2 in boxes]
+
     for cx, cy in centers:
         cv2.circle(img, (int(cx), int(cy)), radius=5, color=(0, 0, 255), thickness=-1)
 
-    # Update stats per seat
     for i, (name, poly) in enumerate(poly_map.items()):
         occupied = any(poly.contains(Point(x, y)) for x, y in centers)
 
@@ -639,10 +599,7 @@ def seat_status(img, results, poly_map, poly_int, stats):
             stats[name]["empty"] += dt
             stats[name]["empty_total"] += dt
 
-        # Draw seat polygon
-        cv2.polylines(img, [poly_int[name]], True, (255, 0, 0), 2)
-
-        # Draw labels at centroid
+        cv2.polylines(img, [poly_int[name]], True, (255, 0, 0), 1)
         cx, cy = map(int, poly.centroid.coords[0])
         draw_label_seat_status(
             img, f"{name} dwell: {stats[name]['dwell']:.1f}s", (cx - 40, cy + 6)
@@ -651,7 +608,6 @@ def seat_status(img, results, poly_map, poly_int, stats):
             img, f"{name} empty: {stats[name]['empty']:.1f}s", (cx - 40, cy - 20)
         )
 
-        # Overlay total-empty stats on panel
         y = panel_y + (i + 1) * line_h
         cv2.putText(
             img,
@@ -662,9 +618,82 @@ def seat_status(img, results, poly_map, poly_int, stats):
             (0, 255, 0),
             2,
         )
-        print(stats)
 
     return img
+
+
+# def seat_status(img, results, poly_map, poly_int, stats):
+#     """
+#     Update and draw seat occupancy stats using real elapsed time between calls.
+#     """
+#     global last_ts
+#     now = time.time()
+#     # Compute delta-time since last frame
+#     if last_ts is None:
+#         dt = 0.0
+#     else:
+#         dt = now - last_ts
+#     last_ts = now
+
+#     # Panel metrics (for overlay)
+#     panel_x, panel_y = 10, 40
+#     line_h = 20
+#     panel_w = 280
+#     panel_h = line_h * len(seats) + 10
+
+#     # Draw panel background once per frame
+#     cv2.rectangle(
+#         img, (panel_x, panel_y), (panel_x + panel_w, panel_y + panel_h), (0, 0, 0), -1
+#     )
+
+#     # Extract detection boxes and compute centers
+#     result = results[0]
+#     boxes = (
+#         result.boxes.xyxy.cpu().numpy()
+#         if result.boxes is not None
+#         else np.empty((0, 4))
+#     )
+#     centers = [((x1 + x2) / 2, (y1 + y2) / 2) for x1, y1, x2, y2 in boxes]
+#     for cx, cy in centers:
+#         cv2.circle(img, (int(cx), int(cy)), radius=5, color=(0, 0, 255), thickness=-1)
+
+#     # Update stats per seat
+#     for i, (name, poly) in enumerate(poly_map.items()):
+#         occupied = any(poly.contains(Point(x, y)) for x, y in centers)
+
+#         if occupied:
+#             stats[name]["dwell"] += dt
+#             stats[name]["empty"] = 0.0
+#         else:
+#             stats[name]["empty"] += dt
+#             stats[name]["empty_total"] += dt
+
+#         # Draw seat polygon
+#         cv2.polylines(img, [poly_int[name]], True, (255, 0, 0), 2)
+
+#         # Draw labels at centroid
+#         cx, cy = map(int, poly.centroid.coords[0])
+#         draw_label_seat_status(
+#             img, f"{name} dwell: {stats[name]['dwell']:.1f}s", (cx - 40, cy + 6)
+#         )
+#         draw_label_seat_status(
+#             img, f"{name} empty: {stats[name]['empty']:.1f}s", (cx - 40, cy - 20)
+#         )
+
+#         # Overlay total-empty stats on panel
+#         y = panel_y + (i + 1) * line_h
+#         cv2.putText(
+#             img,
+#             f"{name}: total empty {stats[name]['empty_total']:.1f}s",
+#             (panel_x + 5, y),
+#             cv2.FONT_HERSHEY_SIMPLEX,
+#             0.6,
+#             (0, 255, 0),
+#             2,
+#         )
+#         print(stats)
+
+#     return img
 
 
 def draw_label_seat_status(
@@ -672,10 +701,10 @@ def draw_label_seat_status(
     text,
     org,
     font=cv2.FONT_HERSHEY_SIMPLEX,
-    font_scale=0.6,
+    font_scale=0.4,
     txt_color=(255, 0, 0),
     bg_color=(0, 0, 0),
-    thickness=2,
+    thickness=1,
 ):
     (w, h), base = cv2.getTextSize(text, font, font_scale, thickness)
     x, y = org
@@ -690,29 +719,198 @@ def draw_label_seat_status(
 
 # In/Out count
 
-
-REGION = [(1394, 1073), (1662, 650)]
-
-MODEL_PATH = "yolo11n.pt"
-counter = solutions.ObjectCounter(
-    model=MODEL_PATH, region=REGION, classes=[0], show_in=False, show_out=False
-)
-
-
-def in_out_count_people(frame, counter):
+def in_out_count_people(frame, counter, user_id=None, camera_id=None):
     results = counter.process(frame)
-    img = results.plot_im
-    counter.display_counts(img)
-    draw_label(img, f"Total IN: {counter.in_count}", (90, 30))
-    draw_label(img, f"Total OUT: {counter.out_count}", (90, 60))
-    now = datetime.now(ZoneInfo("Asia/Riyadh")).strftime("%Y-%m-%dT%H:%M:%S%z")
-    in_out_stat = {
-        "real_soudi_time": now,
-        "in_count": counter.in_count,
-        "out_count": counter.out_count,
-    }
-    print(in_out_stat)
+    img = results.plot_im.copy()
+    
+    # ✅ Bigger IN/OUT labels
+    big_font = cv2.FONT_HERSHEY_SIMPLEX
+    big_scale = 1.0
+    big_thickness = 3
+
+    draw_label(img, f"Total IN: {counter.in_count}", (50, 50),
+               font=big_font, font_scale=big_scale, thickness=big_thickness)
+    draw_label(img, f"Total OUT: {counter.out_count}", (50, 100),
+               font=big_font, font_scale=big_scale, thickness=big_thickness)
+
+    if user_id is not None and camera_id is not None:
+        # ✅ Update memory store
+        snapshot = update_in_out_stats(user_id, camera_id, counter)
+        logger.info(f"📝 [in_out_count_people] Updated global store → {snapshot}")
+
+        # ✅ Immediately save JSON (no need to wait 5s worker)
+        try:
+            from camera.tasks import save_in_out_stats_to_file
+
+            logger.info("💾 [in_out_count_people] Forcing immediate save...")
+            save_in_out_stats_to_file()   # <-- force write here
+        except Exception as e:
+            logger.error(f"❌ [in_out_count_people] Failed immediate save: {e}")
+
+    else:
+        logger.warning("⚠️ [in_out_count_people] user_id or camera_id missing, cannot persist counts")
+
     return img
+
+
+# _________________________________________________________________________________________________________________________________________
+
+
+time_tracker_state = {}
+
+# People time tracker
+def initialize_zones_dict(zones_dict):
+    return {label: Polygon(coords) for label, coords in zones_dict.items()}
+
+
+def get_color(track_id, color_map):
+    if track_id not in color_map:
+        np.random.seed(track_id)
+        color_map[track_id] = tuple(int(x) for x in np.random.randint(0, 255, size=3))
+    return color_map[track_id]
+
+
+def process_frame(frame, tracker_obj, region_polygons, TIMEZONE,
+                  entry_time_per_zone, wall_clock_entry_times,
+                  dwell_time_per_zone, color_map, user_id=None, camera_id=None):
+    logs = []
+    try:
+        tracker_obj.extract_tracks(frame)
+    except Exception as e:
+        print("Tracking failed:", e)
+        return frame, []
+
+    annotator = SolutionAnnotator(frame, line_width=2)
+    current_time = time.monotonic()
+
+    # 🔹 Draw zones
+    for label, poly in region_polygons.items():
+        pts = [(int(x), int(y)) for x, y in poly.exterior.coords]
+        color = (0, 255, 0) if hash(label) % 2 == 0 else (255, 0, 0)
+        annotator.draw_region(pts, color=color, thickness=2)
+
+    # 🔹 Process tracks
+    for box, track_id, cls in zip(tracker_obj.boxes, tracker_obj.track_ids, tracker_obj.clss):
+        cx = int((box[0] + box[2]) / 2)
+        cy = int((box[1] + box[3]) / 2)
+        center = Point(cx, cy)
+
+        inside_zones = [label for label, poly in region_polygons.items() if poly.intersects(center)]
+
+        if inside_zones:
+            for label in inside_zones:
+                if track_id not in entry_time_per_zone[label]:
+                    entry_time_per_zone[label][track_id] = current_time
+                    wall_clock_entry_times[label][track_id] = datetime.now(TIMEZONE)
+
+                elapsed = current_time - entry_time_per_zone[label][track_id]
+                dwell_time_per_zone[label][track_id] = elapsed
+
+                label_text = f"{int(elapsed)}s"
+                color = get_color(track_id, color_map)
+                annotator.box_label(box, label=label_text, color=color)
+
+        else:
+            for label in list(region_polygons.keys()):
+                if track_id in entry_time_per_zone[label]:
+                    entry_wall = wall_clock_entry_times[label].pop(track_id, None)
+                    exit_wall = datetime.now(TIMEZONE)
+
+                    entry_time_per_zone[label].pop(track_id, None)
+                    dwell_time_per_zone[label].pop(track_id, None)
+
+                    if entry_wall:
+                        duration = round((exit_wall - entry_wall).total_seconds(), 2)
+                        visit_id = f"{label}_{entry_wall.strftime('%Y%m%dT%H%M%S')}_{track_id}"
+
+                        logs.append({
+                            "visit_id": visit_id,
+                            "zone": label,
+                            "entry_time": entry_wall.isoformat(),
+                            "exit_time": exit_wall.isoformat(),
+                            "duration_seconds": duration
+                        })
+
+                        # 🔹 Save duration into history
+                        state = time_tracker_state.get((user_id, camera_id))
+                        if state:
+                            state["history"][track_id].append(duration)
+                            logger.info(f"✅ Stored visit {visit_id} → {duration} sec (track_id={track_id})")
+                            logger.info(f"📊 Current history for cam {camera_id}: {dict(state['history'])}")
+
+    result_img = annotator.result()
+    return result_img, logs
+
+
+def people_time_tracker(frame, people_tracker, zone_polygons, TIMEZONE,
+                        entry_time_per_zone, wall_clock_entry_times,
+                        dwell_time_per_zone, track_colors, user_id=None, camera_id=None):
+
+    img, logs = process_frame(
+        frame,
+        people_tracker,
+        zone_polygons,
+        TIMEZONE,
+        entry_time_per_zone,
+        wall_clock_entry_times,
+        dwell_time_per_zone,
+        track_colors,
+        user_id,
+        camera_id
+    )
+
+    logger.info(f"People time tracker Stats---: {logs}")
+
+    # 🔹 Print avg waiting time
+    avg_wait = get_average_waiting_time(user_id, camera_id)
+    logger.info(f"⏱️ Average waiting time so far: {avg_wait} seconds")
+
+    return img
+
+
+def _zones_key(zones_dict):
+    # make zones hashable for "zones changed" detection
+    return tuple(sorted((name, tuple(map(tuple, pts))) for name, pts in zones_dict.items()))
+
+
+def get_time_tracker_state(user_id, camera_id, zones):
+    key = (user_id, camera_id)
+    zkey = _zones_key(zones)
+
+    state = time_tracker_state.get(key)
+    if (state is None) or (state["zones_key"] != zkey):
+        # (Re)initialize on first run or if zones changed
+        state = {
+            "people_tracker": BaseSolution(model="yolo11n.pt", classes=[0], conf=0.3, device="cpu"),
+            "zone_polygons": {label: Polygon(coords) for label, coords in zones.items()},
+            "entry": {label: {} for label in zones},
+            "dwell": {label: {} for label in zones},
+            "wall":  {label: {} for label in zones},
+            "colors": {},
+            "tz": pytz.timezone("Asia/Riyadh"),
+            "zones_key": zkey,
+            "history": defaultdict(list),   
+        }
+        time_tracker_state[key] = state
+
+    return state
+
+
+
+def get_average_waiting_time(user_id, camera_id):
+    state = time_tracker_state.get((user_id, camera_id))
+    if not state:
+        logger.info("⚠️ No state found yet.")
+        return 0.0
+
+    all_durations = [d for durations in state["history"].values() for d in durations]
+    if not all_durations:
+        logger.info("⚠️ No completed visits yet.")
+        return 0.0
+
+    avg_wait = sum(all_durations) / len(all_durations)
+    logger.info(f"📈 Average wait from {len(all_durations)} visits = {avg_wait:.2f}s")
+    return round(avg_wait, 2)
 
 
 # _________________________________________________________________________________________________________________________________________
@@ -762,66 +960,185 @@ def fire_smoke_detection(frame, boxes):
 # main function
 
 
+
+# Defaults for the counter region/model (used if DB zones missing)
+REGION = [(710, 216), (710, 204), (788, 298), (786, 307)]
+MODEL_PATH = "yolo11n.pt"
+
+# Cache pose model so it's loaded once per process
+_POSE_MODEL = None
+
+
+def _get_pose_model():
+    global _POSE_MODEL
+    if _POSE_MODEL is None:
+        _POSE_MODEL = YOLO(resource_path("yolo11n-pose.pt"))
+    return _POSE_MODEL
+
+
+import logging
+
+logger = logging.getLogger("camera_ai")
+
+def _extract_region(zones, default_region, frame_width, frame_height):
+    """
+    Normalize zones into dict of {name: polygon} and convert percentages to pixel coordinates.
+    """
+    if not zones:
+        return {"Default": default_region}
+    
+    if isinstance(zones, dict):
+        out = {}
+        for name, poly in zones.items():
+            try:
+                # Convert percentage coordinates to pixel coordinates
+                pixel_poly = []
+                for pt in poly:
+                    if len(pt) == 2:
+                        # Convert from percentage (0-100) to pixel coordinates
+                        x_percent, y_percent = pt
+                        x_pixel = (x_percent / 100.0) * frame_width
+                        y_pixel = (y_percent / 100.0) * frame_height
+                        pixel_poly.append((int(x_pixel), int(y_pixel)))
+                    else:
+                        # Assume already in pixel format
+                        pixel_poly.append(tuple(map(int, pt)))
+                out[name] = pixel_poly
+                print(f"[Zones] Converted {name}: {poly} -> {pixel_poly}")
+            except Exception as e:
+                print(f"[Zones] Failed parsing {name}: {e}")
+        return out
+    
+    if isinstance(zones, list):
+        try:
+            pixel_poly = []
+            for pt in zones:
+                x_percent, y_percent = pt
+                x_pixel = (x_percent / 100.0) * frame_width
+                y_pixel = (y_percent / 100.0) * frame_height
+                pixel_poly.append((int(x_pixel), int(y_pixel)))
+            return {"Zone1": pixel_poly}
+        except Exception as e:
+            print(f"[Zones] Failed parsing list: {e}")
+            return {"Default": default_region}
+    
+    return {"Default": default_region}
+
 def execute_user_ai_models(
     user_id, camera_id, frame, rtsp_url=None, save_to_json=False
 ):
     print(f"{user_id=}")
     print(f"{camera_id=}")
-
+    
+    # Get frame dimensions
+    frame_height, frame_width = frame.shape[:2]
+    print(f"Frame dimensions: {frame_width}x{frame_height}")
+    
     user_ai_models = UserAiModel.objects.filter(
         user_id=user_id, camera_id=camera_id, is_active=True
     )
+    
+    function_map = {
+        "blur_faces": blur_faces,
+        "pixelate_people": pixelate_people,
+        "count_people": count_people,
+        "generate_people_heatmap": generate_people_heatmap,
+        "track_posture_and_occupancy": track_posture_and_occupancy,
+        "seat_status": seat_status,
+        "in_out_count_people": in_out_count_people,
+        "fire_smoke_detction": fire_smoke_detection,
+        "ppe_detection": ppe_detection,
+        "people_time_tracker": people_time_tracker,
 
+    }
+    
+    out_frame = frame.copy()
+    pose_model = None
+    pose_results = None
+    
+    def ensure_pose_results():
+        nonlocal pose_model, pose_results
+        if pose_results is None:
+            if pose_model is None:
+                pose_model = _get_pose_model()
+            pose_results = pose_model(out_frame)
+        return pose_results
+    
     for user_ai_model in user_ai_models:
         ai_model = user_ai_model.aimodel
         function_name = ai_model.function_name
         print(f"Calling function: {function_name}")
-
-        function_map = {
-            "blur_faces": blur_faces,
-            "pixelate_people": pixelate_people,
-            "count_people": count_people,
-            "generate_people_heatmap": generate_people_heatmap,
-            "track_posture_and_occupancy": track_posture_and_occupancy,
-            "seat_status": seat_status,
-            "in_out_count_people": in_out_count_people,
-            "fire_smoke_detction": fire_smoke_detection,
-            "ppe_detection": ppe_detection,
-        }
-
+        
         if function_name not in function_map:
             print(f"❌ No function found for AiModel {function_name}.")
             continue
-
-        function_to_execute = function_map[function_name]
-        print(f"Executing {function_name} for user {user_id} and camera {camera_id}.")
-
+        
         try:
-            model = YOLO(resource_path("yolo11n-pose.pt"))
-            results = model(frame)
+            if function_name == "people_time_tracker":  # <- ensure this is elif in your final code
+                zones = _extract_region(user_ai_model.zones, REGION, frame_width, frame_height)
+                logger.info(f"[Zones] Final zones for camera {user_ai_model.camera_id}: {zones}")
 
-            if not results:
-                print(f"⚠️ No results from YOLO model for {function_name}")
-                continue
+                state = get_time_tracker_state(user_id, camera_id, zones)
 
-            # Handle seat_status specifically
-            if function_name == "seat_status":
-                poly_map, poly_int, stats = get_seat_polygons_from_model(user_id, camera_id)
+                out_frame = people_time_tracker(
+                    out_frame,  # use the current working frame
+                    state["people_tracker"],
+                    state["zone_polygons"],
+                    state["tz"],
+                    state["entry"],
+                    state["wall"],
+                    state["dwell"],
+                    state["colors"],
+                )
+
+
+            elif function_name == "in_out_count_people":
+                # Pass frame dimensions to convert percentages to pixels
+                zones = _extract_region(user_ai_model.zones, REGION, frame_width, frame_height)
+                logger.info(f"[Zones] Final zones for camera {user_ai_model.camera_id}: {zones}")
+                
+                for zone_name, region in zones.items():
+                    logger.info(f"Running counter for {zone_name}: {region}")
+                    # Create a unique key for the counter
+                    zone_key = f"{camera_id}_{zone_name}"
+
+                    # Reuse or create ObjectCounter
+                    if zone_key not in zone_counters:
+                        zone_counters[zone_key] = solutions.ObjectCounter(
+                            model="yolo11n.pt",
+                            region=region,
+                            classes=[0],
+                            analytics_type="crossing",  
+                            show_in=False,
+                            show_out=False,
+                            show_conf=False,
+                            show_labels=False,
+                            line_width=1,
+                        )
+                        logger.info(f"✅ Initialized ObjectCounter for zone {zone_key}")
+
+                    counter = zone_counters[zone_key]
+                    out_frame = in_out_count_people(out_frame, counter, user_id, camera_id)
+            elif function_name == "seat_status":
+                results = ensure_pose_results()
+                poly_map, poly_int, stats = get_seat_polygons_from_model(
+                    user_id, camera_id, frame_width, frame_height
+                )
                 if not poly_map:
-                    print("⚠️ No seat zones configured.")
-                    return
-                model = YOLO(resource_path("yolo11n-pose.pt"))
-                results = model(frame)
-                if results:
-                    processed_frame = seat_status(frame, results, poly_map, poly_int, stats)
+                    print("⚠️ No seat zones configured for seat_status.")
+                    continue
+                out_frame = seat_status(out_frame, results, poly_map, poly_int, stats)
+
             else:
-                processed_frame = function_to_execute(frame, results)
-
-
+                results = ensure_pose_results()
+                func = function_map[function_name]
+                out_frame = func(out_frame, results)
+            
             print(f"✅ Processed frame using {function_name}.")
-
         except Exception as e:
             print(f"❌ Error during {function_name} execution: {e}")
+    
+    return out_frame
 
 
 def save_sample_data_to_json(user_id, camera_id, frame):

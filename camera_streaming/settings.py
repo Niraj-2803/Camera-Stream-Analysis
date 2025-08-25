@@ -56,7 +56,7 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
-    # 'camera.middleware.trial_expiry_middleware',
+    'camera.middleware.trial_expiry_middleware',
     'corsheaders.middleware.CorsMiddleware',  # 🔥 add this FIRST
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
@@ -114,17 +114,22 @@ TEMPLATES = [
 # Database
 # https://docs.djangoproject.com/en/5.1/ref/settings/#databases
 
-# import os
+# Persistent directory (in user home, safe from Temp deletion)
+PERSISTENT_DIR = os.path.expanduser("~/.camex")
+os.makedirs(PERSISTENT_DIR, exist_ok=True)
 
-# PERSISTENT_DIR = os.path.expanduser("~/.camex")  # Example persistent folder
-# os.makedirs(PERSISTENT_DIR, exist_ok=True)  # Make it if missing
+# Database
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.sqlite3',
+        'NAME': os.path.join(PERSISTENT_DIR, "data.sqlite3"),
+    }
+}
 
-# DATABASES = {
-#     'default': {
-#         'ENGINE': 'django.db.backends.sqlite3',
-#         'NAME': os.path.join(PERSISTENT_DIR, "data.sqlite3"),
-#     }
-# }
+# Media files → save in ~/.camex/media instead of BASE_DIR/media
+MEDIA_URL = '/media/'
+MEDIA_ROOT = os.path.join(PERSISTENT_DIR, 'media')
+os.makedirs(MEDIA_ROOT, exist_ok=True)
 
 
 # DATABASES = {
@@ -134,20 +139,20 @@ TEMPLATES = [
 #     }
 # }
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': env("DB_NAME"),
-        'USER': env("DB_USER"),
-        'PASSWORD': env("DB_PASSWORD"),
-        'HOST': env("DB_HOST"),
-        'PORT': env("DB_PORT"),
-    }
-}
+# DATABASES = {
+#     'default': {
+#         'ENGINE': 'django.db.backends.postgresql',
+#         'NAME': env("DB_NAME"),
+#         'USER': env("DB_USER"),
+#         'PASSWORD': env("DB_PASSWORD"),
+#         'HOST': env("DB_HOST"),
+#         'PORT': env("DB_PORT"),
+#     }
+# }
 
 # Media files
-MEDIA_URL = '/media/'
-MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+# MEDIA_URL = '/media/'
+# MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
 # Password validation
 # https://docs.djangoproject.com/en/5.1/ref/settings/#auth-password-validators

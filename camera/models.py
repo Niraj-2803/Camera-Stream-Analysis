@@ -15,7 +15,7 @@ class Camera(BaseModel):
     username = models.CharField(max_length=100, blank=True, null=True, default="")
     password = models.CharField(max_length=100, blank=True, null=True, default="")
     is_active = models.BooleanField(default=True)
-    created_by = models.ForeignKey(User, on_delete=models.CASCADE, related_name='cameras')
+    created_by = models.ForeignKey(User, on_delete=models.CASCADE, related_name='cameras',null=True, blank=True)
     group = models.ForeignKey(CameraGroup, on_delete=models.SET_NULL, null=True, blank=True, related_name='cameras')
 
     def __str__(self):
@@ -38,6 +38,9 @@ class UserAiModel(models.Model):
     camera = models.ForeignKey(Camera, on_delete=models.CASCADE, related_name='camera')
     is_active = models.BooleanField(default=False)
     zones = models.JSONField(default=dict, blank=True, null=True)  # Add this line
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
+    is_deleted = models.BooleanField(default=False, null=True, blank=True)
+
 
     class Meta:
         unique_together = ('user', 'aimodel', 'camera')
@@ -53,3 +56,11 @@ class SeatStatsLog(models.Model):
 
     class Meta:
         unique_together = ('user', 'camera', 'date')
+
+
+class TrialConfig(models.Model):
+    expiry_date = models.DateField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Expiry: {self.expiry_date}"

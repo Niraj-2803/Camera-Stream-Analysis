@@ -1,46 +1,35 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_submodules
-from PyInstaller.utils.hooks import collect_all
+from PyInstaller.utils.hooks import collect_submodules, collect_all
 
 datas = [
     ('PPE_model.pt', '.'),
     ('yolov8n-pose.pt', '.'),
     ('fire_smoke_model.pt', '.'),
     ('staticfiles', 'staticfiles'),
-    ('camera_streaming', 'camera_streaming')
+    ('camera_streaming', 'camera_streaming'),
 ]
+
 binaries = []
 hiddenimports = []
 
-# Custom submodules
-hiddenimports += collect_submodules('celery')
+# your apps and migrations
 hiddenimports += collect_submodules('camera')
-hiddenimports += collect_submodules('camera.management.commands')
+hiddenimports += collect_submodules('camera.migrations')
+hiddenimports += collect_submodules('users')
+hiddenimports += collect_submodules('users.migrations')
+hiddenimports += collect_submodules('event')
+hiddenimports += collect_submodules('event.migrations')
+
+# libs you use
+hiddenimports += collect_submodules('celery')
 hiddenimports += collect_submodules('rest_framework_simplejwt')
+hiddenimports += collect_submodules('shapely')
+hiddenimports += collect_submodules('drf_yasg')
 
-# Django
-tmp = collect_all('django')
-datas += tmp[0]; binaries += tmp[1]; hiddenimports += tmp[2]
-
-# Channels
-tmp = collect_all('channels')
-datas += tmp[0]; binaries += tmp[1]; hiddenimports += tmp[2]
-
-# Uvicorn
-tmp = collect_all('uvicorn')
-datas += tmp[0]; binaries += tmp[1]; hiddenimports += tmp[2]
-
-# Starlette
-tmp = collect_all('starlette')
-datas += tmp[0]; binaries += tmp[1]; hiddenimports += tmp[2]
-
-# Celery again (no harm)
-tmp = collect_all('celery')
-datas += tmp[0]; binaries += tmp[1]; hiddenimports += tmp[2]
-
-# ✅ Add drf_yasg templates & dependencies
-tmp = collect_all('drf_yasg')
-datas += tmp[0]; binaries += tmp[1]; hiddenimports += tmp[2]
+# include package data (templates/static/etc.)
+for pkg in ['django', 'channels', 'uvicorn', 'starlette', 'celery', 'drf_yasg']:
+    tmp = collect_all(pkg)
+    datas += tmp[0]; binaries += tmp[1]; hiddenimports += tmp[2]
 
 a = Analysis(
     ['runserver.py'],
@@ -50,11 +39,12 @@ a = Analysis(
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=[],  # not needed; runserver.py handles runtime migrations
     excludes=[],
     noarchive=False,
     optimize=0,
 )
+
 pyz = PYZ(a.pure)
 
 exe = EXE(

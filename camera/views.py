@@ -362,7 +362,11 @@ class UserAiModelZoneView(APIView):
         request_body=UserAiModelZoneSerializer,
         responses={200: "Updated", 404: "Not Found", 400: "Bad Request"},
         operation_summary="Update Zones for UserAiModel",
-        operation_description="Updates or assigns zones for an existing UserAiModel instance."
+        operation_description=(
+            "Adds new zones or updates existing ones for a UserAiModel instance. "
+            "If a zone key already exists, it will be overwritten. "
+            "If it's new, it will be appended."
+        )
     )
     def post(self, request):
         serializer = UserAiModelZoneSerializer(data=request.data)
@@ -372,7 +376,7 @@ class UserAiModelZoneView(APIView):
         user_id = serializer.validated_data['user_id']
         camera_id = serializer.validated_data['camera_id']
         aimodel_id = serializer.validated_data['aimodel_id']
-        zones = serializer.validated_data['zones']
+        new_zones = serializer.validated_data['zones']
 
         try:
             user_aimodel = UserAiModel.objects.get(
@@ -383,33 +387,84 @@ class UserAiModelZoneView(APIView):
         except UserAiModel.DoesNotExist:
             return Response({"detail": "UserAiModel entry not found."}, status=404)
 
-        user_aimodel.zones = zones
-        user_aimodel.save()
+        # Merge logic
+        current_zones = user_aimodel.zones or {}
+        if not isinstance(current_zones, dict):
+            current_zones = {}
 
-        return Response({"detail": "Zones updated successfully."}, status=200)
+        for key, val in new_zones.items():
+            current_zones[key] = val  # update if exists, else add
+
+        user_aimodel.zones = current_zones
+        user_aimodel.save(update_fields=["zones"])
+
+        return Response({
+            "detail": "Zones updated successfully.",
+            "zones": current_zones
+        }, status=200)
+
+
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status, permissions
+from drf_yasg.utils import swagger_auto_schema
+from drf_yasg import openapi
+from datetime import datetime, date
+
+from .models import TrialConfig
+from .serializers import ExpiryConfigSerializer, ExpiryStatusSerializer
+
+# NOTE: Store in env or settings in production
+ADMIN_PASSWORD = "rajesh123"
+
+class ExpiryConfigView(APIView):
+    permission_classes = [permissions.AllowAny]  # Or restrict to admin
 
     @swagger_auto_schema(
-        query_serializer=UserAiModelZoneQuerySerializer,
-        responses={200: "Zones Retrieved", 404: "Not Found", 400: "Bad Request"},
-        operation_summary="Get Zones for UserAiModel",
-        operation_description="Retrieves zones stored for the specified User, Camera, and AiModel."
+        request_body=ExpiryConfigSerializer,
+        responses={
+            200: "Expiry date set",
+            400: "Invalid data",
+            401: "Unauthorized"
+        },
+        operation_summary="Set Expiry Date",
+        operation_description="Sets an expiry date for the application. Requires a password."
     )
-    def get(self, request):
-        serializer = UserAiModelZoneQuerySerializer(data=request.query_params)
+    def post(self, request):
+        serializer = ExpiryConfigSerializer(data=request.data)
         if not serializer.is_valid():
             return Response(serializer.errors, status=400)
 
-        user_id = serializer.validated_data['user_id']
-        camera_id = serializer.validated_data['camera_id']
-        aimodel_id = serializer.validated_data['aimodel_id']
+        password = serializer.validated_data['password']
+        expiry_date = serializer.validated_data['expiry_date']
 
-        try:
-            user_aimodel = UserAiModel.objects.get(
-                user_id=user_id,
-                camera_id=camera_id,
-                aimodel_id=aimodel_id
-            )
-        except UserAiModel.DoesNotExist:
-            return Response({"detail": "UserAiModel entry not found."}, status=404)
+        if password != ADMIN_PASSWORD:
+            return Response({"detail": "Invalid password"}, status=401)
 
-        return Response({"zones": user_aimodel.zones or {}}, status=200)
+        TrialConfig.objects.all().delete()  # Only one config allowed
+        TrialConfig.objects.create(expiry_date=expiry_date)
+
+        return Response({"message": "Expiry date set successfully"}, status=200)
+
+    @swagger_auto_schema(
+        responses={200: ExpiryStatusSerializer},
+        operation_summary="Get Expiry Status",
+        operation_description="Returns expiry date and status (active/expired)."
+    )
+    def get(self, request):
+        config = TrialConfig.objects.first()
+        if not config:
+            return Response({"status": "not_set"}, status=200)
+
+        today = date.today()
+        if today > config.expiry_date:
+            return Response({
+                "status": "expired",
+                "expiry_date": config.expiry_date
+            }, status=200)
+
+        return Response({
+            "status": "active",
+            "expiry_date": config.expiry_date,
+            "days_left": (config.expiry_date - today).days
+        }, status=200)

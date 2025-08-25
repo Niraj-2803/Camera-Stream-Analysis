@@ -84,3 +84,13 @@ class UserAiModelZoneQuerySerializer(serializers.Serializer):
     user_id = serializers.IntegerField()
     camera_id = serializers.IntegerField()
     aimodel_id = serializers.IntegerField()
+
+
+class ExpiryConfigSerializer(serializers.Serializer):
+    password = serializers.CharField()
+    expiry_date = serializers.DateField()
+
+class ExpiryStatusSerializer(serializers.Serializer):
+    status = serializers.ChoiceField(choices=["not_set", "expired", "active"])
+    expiry_date = serializers.DateField(required=False)
+    days_left = serializers.IntegerField(required=False)
