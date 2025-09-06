@@ -80,6 +80,16 @@ def run_startup():
         print(f"⚠️ collectstatic failed: {e}")
 
 
+    try:
+        import camera.management.commands.aimodel_script  # ensure bundled
+        print("Running aimodel_script command...")
+        call_command("aimodel_script")
+        print("✅ AiModel instances created successfully.")
+    except Exception as e:
+        print(f"⚠️ aimodel_script failed or not present: {e}")
+
+
+
 def run_periodic_tasks():
     """Run periodic tasks in background thread (no Celery)."""
     from camera.tasks import save_in_out_stats_to_file, save_seat_stats_to_file,load_in_out_stats_from_file
