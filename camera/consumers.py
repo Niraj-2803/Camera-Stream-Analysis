@@ -3,26 +3,27 @@ import cv2
 import threading
 import time
 import os
-from channels.generic.websocket import WebsocketConsumer
 import json
+from queue import Queue, Full, Empty
+from threading import Thread, Lock
 from pathlib import Path
-from datetime import timedelta, datetime
+from datetime import datetime
 from channels.generic.websocket import WebsocketConsumer
 from django.conf import settings
 from urllib.parse import parse_qs
-from camera.aimodels.helper import *
-from .models import Camera
+from .models import Camera, InOutCount, User
+from camera.aimodels.helper import execute_user_ai_models
+from django.db.models import Sum, Q
+from channels.db import database_sync_to_async
 
-# Configure logging to output to stdout, which is captured by Gunicorn
-logging.basicConfig(level=logging.DEBUG)  # Change level to DEBUG, INFO, etc. based on your needs
+# Configure logging
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-import os, time, cv2
-from queue import Queue, Full, Empty
-from threading import Thread, Lock
-from channels.generic.websocket import WebsocketConsumer
-
+# ==============================
+# Camera Streaming
+# ==============================
 class CameraStreamConsumer(WebsocketConsumer):
     def connect(self):
         self.user_id = self.scope["url_route"]["kwargs"]["user_id"]
@@ -31,16 +32,15 @@ class CameraStreamConsumer(WebsocketConsumer):
 
         self.accept()
         self.streaming = True
-        print(f"📡 Camera stream started for user {self.user_id}, camera {self.camera_id}, mode {mode}.")
+        logger.info(f"📡 Camera stream started for user={self.user_id}, camera={self.camera_id}, mode={mode}")
 
-        # Shared AI state
-        self.ai_queue = None            # frames → AI worker
-        self.ai_result_lock = Lock()    # protects ai_last_vis
-        self.ai_last_vis = None         # last annotated image from AI worker (np.ndarray)
+        # AI support
+        self.ai_queue = None
+        self.ai_result_lock = Lock()
+        self.ai_last_vis = None
 
         if mode == "aimodel":
-            print("🌐 Mode set to 'aimodel'. Initiating AI model stream with posture and occupancy tracking.")
-            self.ai_queue = Queue(maxsize=1)  # keep only the freshest frame to avoid lag
+            self.ai_queue = Queue(maxsize=1)
             self.ai_worker_thread = Thread(target=self._ai_worker_loop, daemon=True)
             self.ai_worker_thread.start()
             Thread(target=self.stream_video_with_ai, daemon=True).start()
@@ -49,7 +49,7 @@ class CameraStreamConsumer(WebsocketConsumer):
 
     def disconnect(self, close_code):
         self.streaming = False
-        print(f"🛑 Camera {self.camera_id} stream stopped for user {self.user_id}.")
+        logger.info(f"🛑 Camera {self.camera_id} stream stopped for user {self.user_id}")
 
     def build_rtsp_url(self, cam):
         if "@" in cam.rtsp_url:
@@ -62,16 +62,13 @@ class CameraStreamConsumer(WebsocketConsumer):
         return cam.rtsp_url
 
     def send_fallback_frame(self):
-        fallback_path = os.path.join(os.path.dirname(__file__), 'no_frame.jpg')
+        fallback_path = os.path.join(getattr(settings, "IMAGE_FILES", ""), "no_frame.jpg")
         fallback_img = cv2.imread(fallback_path)
         if fallback_img is not None:
-            _, self.fallback_buffer = cv2.imencode('.jpg', fallback_img)
-            self.send(bytes_data=self.fallback_buffer.tobytes())
-            print("⚠️ Sending fallback frame (no frame available).")
+            _, buffer = cv2.imencode('.jpg', fallback_img, [int(cv2.IMWRITE_JPEG_QUALITY), 40])
+            self.send(bytes_data=buffer.tobytes())
         else:
-            self.fallback_buffer = None
             self.send(bytes_data=b'')
-            print("❌ no_frame.jpg missing, sending empty frame.")
 
     def _stream_camera(self, rtsp_url, process_frame_callback=None, overlay_callback=None):
         cap = cv2.VideoCapture(rtsp_url)
@@ -81,32 +78,28 @@ class CameraStreamConsumer(WebsocketConsumer):
         cap.set(cv2.CAP_PROP_FPS, 30)
 
         if not cap.isOpened():
-            print(f"❌ Failed to open RTSP stream.")
+            logger.warning("❌ Failed to open RTSP stream.")
             self.send_fallback_frame()
             return
 
-        print("✅ RTSP stream opened successfully.")
+        logger.info("✅ RTSP stream opened successfully.")
         frame_counter = 0
 
         while self.streaming:
             ret, frame = cap.read()
             if not ret:
-                print("⚠️ Frame not received. Skipping...")
+                logger.warning("⚠️ Frame not received. Skipping...")
                 self.send_fallback_frame()
                 continue
 
             frame_counter += 1
-            if frame_counter % 10 == 0:
-                print("Hello Rajesh")
 
-            # Non-blocking AI enqueue
             if process_frame_callback:
                 try:
                     process_frame_callback(frame, frame_counter)
                 except Exception as e:
-                    print(f"⚠️ Error during frame processing enqueue: {e}")
+                    logger.warning(f"⚠️ Error enqueueing frame for AI: {e}")
 
-            # Overlay latest AI result if any (non-blocking)
             frame_to_send = frame
             if overlay_callback:
                 try:
@@ -114,67 +107,51 @@ class CameraStreamConsumer(WebsocketConsumer):
                     if vis is not None:
                         frame_to_send = vis
                 except Exception as e:
-                    print(f"⚠️ Error during overlay: {e}")
+                    logger.warning(f"⚠️ Error applying AI overlay: {e}")
 
-            _, buffer = cv2.imencode('.jpg', frame_to_send)
+            _, buffer = cv2.imencode('.jpg', frame_to_send, [int(cv2.IMWRITE_JPEG_QUALITY), 40])
             self.send(bytes_data=buffer.tobytes())
-
-            time.sleep(0.005)  # small pacing; keeps latency low
+            time.sleep(0.005)
 
         cap.release()
 
-    # ---------- NORMAL mode ----------
     def stream_video(self):
         try:
             cam = Camera.objects.get(id=self.camera_id)
-            print(f"🔗 Camera found: {cam.id} - {cam.rtsp_url}")
         except Camera.DoesNotExist:
-            print(f"❌ Camera with ID {self.camera_id} does not exist.")
+            logger.error(f"❌ Camera with ID {self.camera_id} does not exist.")
             self.close()
             return
 
         rtsp_url = self.build_rtsp_url(cam)
         self._stream_camera(rtsp_url)
 
-    # ---------- AIMODEL mode (decoupled) ----------
     def stream_video_with_ai(self):
         try:
             cam = Camera.objects.get(id=self.camera_id)
-            print(f"🔗 Camera found: {cam.id} - {cam.rtsp_url}")
         except Camera.DoesNotExist:
-            print(f"❌ Camera with ID {self.camera_id} does not exist.")
+            logger.error(f"❌ Camera with ID {self.camera_id} does not exist.")
             self.close()
             return
 
         rtsp_url = self.build_rtsp_url(cam)
 
         def process_frame_callback(frame, frame_counter):
-            # Optionally resize for faster AI:
-            # ai_frame = cv2.resize(frame, (640, 360))
-            ai_frame = frame
-
-            # Send every Nth frame to AI to reduce compute
-            N = 3
-            if frame_counter % N != 0 or self.ai_queue is None:
+            if frame_counter % 5 != 0 or self.ai_queue is None:
                 return
-
             try:
                 if self.ai_queue.full():
-                    try:
-                        _ = self.ai_queue.get_nowait()  # drop oldest
-                    except Empty:
-                        pass
-                self.ai_queue.put_nowait(ai_frame)
+                    _ = self.ai_queue.get_nowait()
+                self.ai_queue.put_nowait(frame)
             except Full:
                 pass
 
         def overlay_callback(_frame):
             with self.ai_result_lock:
-                return None if self.ai_last_vis is None else self.ai_last_vis
+                return self.ai_last_vis
 
         self._stream_camera(rtsp_url, process_frame_callback, overlay_callback)
 
-    # ---------- Single persistent AI worker ----------
     def _ai_worker_loop(self):
         while self.streaming:
             try:
@@ -191,148 +168,21 @@ class CameraStreamConsumer(WebsocketConsumer):
                     save_to_json=False,
                 )
                 with self.ai_result_lock:
-                    self.ai_last_vis = vis if vis is not None else None
+                    self.ai_last_vis = vis
             except Exception as e:
-                print(f"⚠️ AI worker error: {e}")
+                logger.error(f"⚠️ AI worker error: {e}")
 
 
-class AnalyticsStreamConsumer(WebsocketConsumer):
-    def connect(self):
-        # Extract ?cam=analytics_2 from query string (default to analytics_1)
-        query_string = self.scope.get("query_string", b"").decode()
-        params = parse_qs(query_string)
-        self.folder_name = params.get("cam", ["analytics_1"])[0]  # Default folder is analytics_1
-
-        self.accept()
-        self.streaming = True
-        print(f"📊 WebSocket connected. Streaming from folder: {self.folder_name}")
-
-        threading.Thread(target=self.stream_live_analytics, daemon=True).start()
-
-    def disconnect(self, close_code):
-        self.streaming = False
-        print("🛑 Analytics WebSocket disconnected.")
-
-    def seconds_to_hm(self, seconds):
-        td = timedelta(seconds=round(seconds))
-        hours, remainder = divmod(td.total_seconds(), 3600)
-        minutes, _ = divmod(remainder, 60)
-        return f"{int(hours)}h {int(minutes)}m"
-
-    def hm_to_seconds(self, hm_string):
-        try:
-            parts = hm_string.lower().split("h")
-            hours = int(parts[0].strip())
-            minutes = int(parts[1].replace("m", "").strip())
-            return hours * 3600 + minutes * 60
-        except:
-            return 0
-
-    def build_person_from_seat(self, seat_name, seat_data, seat_id):
-        dwell = seat_data.get("dwell", 0.0)
-        empty_total = seat_data.get("empty_total", 0.0)
-        system_time = dwell + empty_total
-
-        productivity = round((dwell / system_time) * 100, 1) if system_time > 0 else 0.0
-        alert = "Long away time" if empty_total >= 3600 else None
-
-        return {
-            "id": seat_id,
-            "person": seat_name,
-            "status": "Active" if dwell > 0 else "Inactive",
-            "productivity": productivity,
-            "sittingTime": self.seconds_to_hm(dwell),
-            "standingTime": self.seconds_to_hm(0),
-            "awayTime": self.seconds_to_hm(empty_total),
-            "systemTime": round(system_time, 1),
-            "productiveHours": self.seconds_to_hm(dwell),
-            "totalHours": self.seconds_to_hm(system_time),
-            "alerts": alert,
-            "hasAlert": alert is not None
-        }
-
-    def get_today_analytics_file(self):
-        today_str = datetime.now().strftime("%Y-%m-%d")
-        return Path(f"{self.folder_name}/{today_str}.json")
-
-    def stream_live_analytics(self):
-        last_sent_timestamp = None
-
-        while self.streaming:
-            analytics_file = self.get_today_analytics_file()
-
-            if not analytics_file.exists():
-                self.send(text_data=json.dumps({"error": f"{analytics_file.name} not found"}))
-                time.sleep(10)
-                continue
-
-            try:
-                with open(analytics_file, "r") as f:
-                    data = json.load(f)
-            except Exception as e:
-                self.send(text_data=json.dumps({"error": f"Error reading file: {str(e)}"}))
-                time.sleep(10)
-                continue
-
-            if not data:
-                time.sleep(10)
-                continue
-
-            frame = data[-1]
-            if frame.get("timestamp") == last_sent_timestamp:
-                time.sleep(10)
-                continue
-
-            last_sent_timestamp = frame.get("timestamp")
-            seat_stats = frame.get("stats", {})
-            people = []
-
-            total_productivity = 0.0
-            total_productive_seconds = 0.0
-            total_persons = 0
-            active_alerts = 0
-
-            for idx, (seat_name, seat_data) in enumerate(seat_stats.items(), start=1):
-                if seat_name == "overall":
-                    continue
-                person = self.build_person_from_seat(seat_name, seat_data, seat_id=idx)
-                people.append(person)
-                total_productivity += person["productivity"]
-                total_productive_seconds += self.hm_to_seconds(person["productiveHours"])
-                total_persons += 1
-                if person["hasAlert"]:
-                    active_alerts += 1
-
-            avg_productivity = round(total_productivity / total_persons, 1) if total_persons else 0.0
-            total_productive_hours = round(total_productive_seconds / 3600, 1)
-            total_hours = round(sum(person["systemTime"] for person in people) / 3600, 1)
-
-            response = {
-                "saudi_time": frame.get("saudi_time"),
-                "stats": people,
-                "average_productivity": avg_productivity,
-                "total_productive_hours": total_productive_hours,
-                "total_hours": total_hours, 
-                "active_alerts_count": active_alerts
-            }
-
-
-            self.send(text_data=json.dumps(response))
-            time.sleep(10)
-
-
-
-
-
+# ==============================
+# Live In/Out Stats
+# ==============================
 class LiveSeatStatsConsumer(WebsocketConsumer):
     def connect(self):
-        query_string = self.scope.get("query_string", b"").decode()
-        params = parse_qs(query_string)
-
+        params = parse_qs(self.scope.get("query_string", b"").decode())
         self.user_id = params.get("user_id", [None])[0]
         self.camera_id = params.get("camera_id", [None])[0]
         self.date_str = params.get("date", [datetime.now().strftime("%Y-%m-%d")])[0]
-        self.mode = params.get("mode", ["seat"])[0]  # default seat mode
+        self.mode = params.get("mode", ["inout"])[0]  # force to inout
 
         if not self.user_id or not self.camera_id:
             self.close()
@@ -340,158 +190,418 @@ class LiveSeatStatsConsumer(WebsocketConsumer):
 
         self.accept()
         self.streaming = True
-        print(
-            f"📡 WebSocket connected: user={self.user_id}, "
-            f"cam={self.camera_id}, date={self.date_str}, mode={self.mode}"
-        )
+        logger.info(f"📡 InOut WebSocket connected: user={self.user_id}, cam={self.camera_id}, date={self.date_str}")
         threading.Thread(target=self.stream_stats, daemon=True).start()
 
     def disconnect(self, close_code):
         self.streaming = False
-        print("🔌 WebSocket disconnected")
-
-    # -------------------------------
-    # Helpers
-    # -------------------------------
-    # def get_file_path(self):
-    #     """Pick correct file depending on mode"""
-    #     if self.mode == "inout":
-    #         filename = f"inout_user{self.user_id}_cam{self.camera_id}_{self.date_str}.json"
-    #     else:  # seat_status default
-    #         filename = f"seat_user{self.user_id}_cam{self.camera_id}_{self.date_str}.json"
-    #     return Path(settings.MEDIA_ROOT) / "seat_stats" / filename
+        logger.info("🔌 InOut WebSocket disconnected")
 
     def get_file_path(self):
-        """Pick correct file depending on mode"""
-        if self.mode == "inout":
-            filename = f"inout_user{self.user_id}_cam{self.camera_id}_{self.date_str}.json"
-            return Path(settings.MEDIA_ROOT) / "in_out_stats" / filename
-        else:  # seat_status default
-            filename = f"seat_user{self.user_id}_cam{self.camera_id}_{self.date_str}.json"
-            return Path(settings.MEDIA_ROOT) / "seat_stats" / filename
+        filename = f"inout_user{self.user_id}_cam{self.camera_id}_{self.date_str}.json"
+        return Path(settings.MEDIA_ROOT) / "in_out_stats" / filename
 
-
-    def seconds_to_hm(self, seconds):
-        td = timedelta(seconds=round(seconds))
-        hours, remainder = divmod(td.total_seconds(), 3600)
-        minutes, _ = divmod(remainder, 60)
-        return f"{int(hours)}h {int(minutes)}m"
-
-    def hm_to_seconds(self, hm_string):
-        try:
-            parts = hm_string.lower().split("h")
-            hours = int(parts[0].strip())
-            minutes = int(parts[1].replace("m", "").strip())
-            return hours * 3600 + minutes * 60
-        except Exception:
-            return 0
-
-    def build_person_from_seat(self, seat_name, seat_data, seat_id):
-        dwell = seat_data.get("dwell", 0.0)
-        empty_total = seat_data.get("empty_total", 0.0)
-        system_time = dwell + empty_total
-
-        productivity = round((dwell / system_time) * 100, 1) if system_time > 0 else 0.0
-        alert = "Long away time" if empty_total >= 3600 else None
-
-        return {
-            "id": seat_id,
-            "person": seat_name,
-            "status": "Active" if dwell > 0 else "Inactive",
-            "productivity": productivity,
-            "sittingTime": self.seconds_to_hm(dwell),
-            "standingTime": self.seconds_to_hm(0),
-            "awayTime": self.seconds_to_hm(empty_total),
-            "systemTime": round(system_time, 1),
-            "productiveHours": self.seconds_to_hm(dwell),
-            "totalHours": self.seconds_to_hm(system_time),
-            "alerts": alert,
-            "hasAlert": alert is not None,
-        }
-
-    def build_seat_response(self, seat_stats):
-        people = []
-        total_productivity = 0.0
-        total_productive_seconds = 0.0
-        total_system_seconds = 0.0
-        total_persons = 0
-        active_alerts = 0
-
-        for idx, (seat_name, seat_data) in enumerate(seat_stats.items(), start=1):
-            person = self.build_person_from_seat(seat_name, seat_data, seat_id=idx)
-            people.append(person)
-            total_productivity += person["productivity"]
-            total_productive_seconds += self.hm_to_seconds(person["productiveHours"])
-            total_system_seconds += person["systemTime"]
-            total_persons += 1
-            if person["hasAlert"]:
-                active_alerts += 1
-
-        avg_productivity = (
-            round(total_productivity / total_persons, 1) if total_persons else 0.0
-        )
-        total_productive_hours = round(total_productive_seconds / 3600, 1)
-        total_hours = round(total_system_seconds / 3600, 1)
-
-        return {
-            "saudi_time": datetime.now().isoformat(),
-            "stats": people,
-            "average_productivity": avg_productivity,
-            "total_productive_hours": total_productive_hours,
-            "total_hours": total_hours,
-            "active_alerts_count": active_alerts,
-        }
-
-    # -------------------------------
-    # Streaming Loop
-    # -------------------------------
     def stream_stats(self):
         last_sent_timestamp = None
-
         while self.streaming:
             filepath = self.get_file_path()
-
             if not filepath.exists():
-                self.send(
-                    text_data=json.dumps({"error": f"{filepath.name} not found"})
-                )
-                time.sleep(10)
+                self.send(text_data=json.dumps({"error": f"{filepath.name} not found"}))
+                time.sleep(5)
                 continue
 
             try:
                 with open(filepath, "r") as f:
                     data = json.load(f)
+            except json.JSONDecodeError as e:
+                logger.warning(f"⚠️ JSON incomplete for {filepath}, retrying: {e}")
+                time.sleep(1)
+                continue
             except Exception as e:
-                self.send(
-                    text_data=json.dumps({"error": f"Error reading file: {str(e)}"})
-                )
-                time.sleep(10)
+                self.send(text_data=json.dumps({"error": f"Error reading file: {str(e)}"}))
+                time.sleep(5)
                 continue
 
-            if not data or not isinstance(data, list):
-                time.sleep(10)
+            if not data:
+                time.sleep(5)
                 continue
 
             latest = data[-1]
             if latest.get("timestamp") == last_sent_timestamp:
-                time.sleep(10)
+                time.sleep(5)
                 continue
             last_sent_timestamp = latest["timestamp"]
 
-            # 🔹 Mode specific processing
-            if self.mode == "seat":
-                seat_stats = latest.get("stats", {})
-                response = self.build_seat_response(seat_stats)
-            else:  # inout
-                stats = latest.get("stats", {})
-                in_count = stats.get("in_count", 0)
-                out_count = stats.get("out_count", 0)
-                response = {
-                    "saudi_time": datetime.now().isoformat(),
-                    "in_count": in_count,
-                    "out_count": out_count,
-                    "total": in_count + out_count,
-                }
+            stats = latest.get("stats", {})
+            in_count = stats.get("in", 0)
+            out_count = stats.get("out", 0)
+
+            response = {
+                "saudi_time": datetime.now().isoformat(),
+                "in_count": in_count,
+                "out_count": out_count,
+                "total": in_count + out_count,
+            }
 
             self.send(text_data=json.dumps(response))
             time.sleep(5)
+
+class LiveDatabaseStatsConsumer(WebsocketConsumer):
+    """
+    WebSocket consumer that reads ONLY from database
+    """
+    def connect(self):
+        params = parse_qs(self.scope.get("query_string", b"").decode())
+        self.user_id = params.get("user_id", [None])[0]
+        self.camera_id = params.get("camera_id", [None])[0]
+        self.date_str = params.get("date", [datetime.now().strftime("%Y-%m-%d")])[0]
+
+        if not self.user_id:
+            self.close(code=4000, reason="user_id is required")
+            return
+
+        # Validate user exists
+        try:
+            User.objects.get(id=self.user_id)
+        except User.DoesNotExist:
+            self.close(code=4001, reason="Invalid user_id")
+            return
+
+        # If camera_id provided, validate it exists
+        if self.camera_id:
+            try:
+                Camera.objects.get(id=self.camera_id)
+            except Camera.DoesNotExist:
+                self.close(code=4002, reason="Invalid camera_id")
+                return
+
+        self.accept()
+        self.streaming = True
+        logger.info(f"🗄️ Database WebSocket connected: user={self.user_id}, cam={self.camera_id}, date={self.date_str}")
+        threading.Thread(target=self.stream_db_stats, daemon=True).start()
+
+    def disconnect(self, close_code):
+        self.streaming = False
+        logger.info("🔌 Database WebSocket disconnected")
+
+    def get_db_stats(self):
+        """Get stats from database only"""
+        try:
+            target_date = datetime.strptime(self.date_str, "%Y-%m-%d").date()
+            
+            if self.camera_id:
+                # Single camera stats
+                try:
+                    inout_record = InOutCount.objects.get(
+                        user_id=self.user_id,
+                        camera_id=self.camera_id,
+                        date=target_date
+                    )
+                    return {
+                        "camera_id": self.camera_id,
+                        "camera_name": inout_record.camera.name,
+                        "date": target_date.isoformat(),
+                        "in_count": inout_record.in_count,
+                        "out_count": inout_record.out_count,
+                        "total": inout_record.total_count,
+                        "last_updated": inout_record.last_updated.isoformat(),
+                        "source": "database"
+                    }
+                except InOutCount.DoesNotExist:
+                    return {
+                        "camera_id": self.camera_id,
+                        "date": target_date.isoformat(),
+                        "in_count": 0,
+                        "out_count": 0,
+                        "total": 0,
+                        "source": "database",
+                        "message": "No data found for this date"
+                    }
+            else:
+                # All cameras stats for user
+                records = InOutCount.objects.filter(
+                    user_id=self.user_id,
+                    date=target_date
+                ).select_related('camera')
+                
+                cameras_data = []
+                total_in = 0
+                total_out = 0
+                
+                for record in records:
+                    camera_data = {
+                        "camera_id": record.camera.id,
+                        "camera_name": record.camera.name,
+                        "in_count": record.in_count,
+                        "out_count": record.out_count,
+                        "total": record.total_count,
+                        "last_updated": record.last_updated.isoformat()
+                    }
+                    cameras_data.append(camera_data)
+                    total_in += record.in_count
+                    total_out += record.out_count
+                
+                return {
+                    "date": target_date.isoformat(),
+                    "total_in_count": total_in,
+                    "total_out_count": total_out,
+                    "total_count": total_in + total_out,
+                    "cameras": cameras_data,
+                    "cameras_count": len(cameras_data),
+                    "source": "database"
+                }
+                
+        except Exception as e:
+            logger.error(f"❌ Error fetching DB stats: {e}")
+            return {"error": f"Database error: {str(e)}"}
+
+    def stream_db_stats(self):
+        last_sent_data = None
+        
+        while self.streaming:
+            current_data = self.get_db_stats()
+
+            # Skip sending if data hasn't changed
+            if current_data == last_sent_data:
+                time.sleep(5)
+                continue
+
+            last_sent_data = current_data.copy()
+            
+            # Add real-time timestamp
+            current_data["saudi_time"] = datetime.now().isoformat()
+            
+            self.send(text_data=json.dumps(current_data))
+            time.sleep(5)
+
+
+# # ==============================
+# # SECURITY CLEANING
+# # ==============================
+# # - Removed AnalyticsStreamConsumer (seat/productivity stats)
+# # - Removed seat-related mode inside LiveSeatStatsConsumer
+# # - All productivity/dwell/empty tracking stripped
+
+# import logging
+# import cv2
+# import threading
+# import time
+# import os
+# import json
+# import subprocess
+# from queue import Queue, Full, Empty
+# from threading import Thread, Lock
+# from pathlib import Path
+# from datetime import datetime
+# from django.http import StreamingHttpResponse, HttpResponse
+# from django.conf import settings
+# from django.views.decorators import gzip
+# from urllib.parse import parse_qs
+# from .models import Camera
+# from camera.aimodels.helper import execute_user_ai_models
+
+# # Configure logging
+# logging.basicConfig(level=logging.INFO)
+# logger = logging.getLogger(__name__)
+
+# # ==============================
+# # Camera Streaming with FFmpeg
+# # ==============================
+
+# class CameraStreamHandler:
+#     def __init__(self, user_id, camera_id, mode="normal"):
+#         self.user_id = user_id
+#         self.camera_id = camera_id
+#         self.mode = mode
+#         self.streaming = True
+#         self.ai_queue = None
+#         self.ai_result_lock = Lock()
+#         self.ai_last_vis = None
+        
+#         # Initialize AI processing if needed
+#         if mode == "aimodel":
+#             self.ai_queue = Queue(maxsize=1)
+#             self.ai_worker_thread = Thread(target=self._ai_worker_loop, daemon=True)
+#             self.ai_worker_thread.start()
+
+#     def build_rtsp_url(self, cam):
+#         if "@" in cam.rtsp_url:
+#             return cam.rtsp_url
+#         if cam.username and cam.password:
+#             parts = cam.rtsp_url.split("://")
+#             if len(parts) == 2:
+#                 protocol, rest = parts
+#                 return f"{protocol}://{cam.username}:{cam.password}@{rest}"
+#         return cam.rtsp_url
+
+#     def get_camera_info(self):
+#         try:
+#             cam = Camera.objects.get(id=self.camera_id)
+#             return cam, self.build_rtsp_url(cam)
+#         except Camera.DoesNotExist:
+#             logger.error(f"❌ Camera with ID {self.camera_id} does not exist.")
+#             return None, None
+
+#     def generate_frames(self):
+#         cam, rtsp_url = self.get_camera_info()
+#         if not cam or not rtsp_url:
+#             # Send fallback frame
+#             fallback_path = os.path.join(getattr(settings, "IMAGE_FILES", ""), "no_frame.jpg")
+#             if os.path.exists(fallback_path):
+#                 with open(fallback_path, 'rb') as f:
+#                     while self.streaming:
+#                         yield (b'--frame\r\n'
+#                                b'Content-Type: image/jpeg\r\n\r\n' + f.read() + b'\r\n')
+#                         time.sleep(1)
+#             return
+
+#         # Use FFmpeg to process the RTSP stream
+#         ffmpeg_cmd = [
+#             'ffmpeg',
+#             '-i', rtsp_url,
+#             '-r', '15',  # Reduce frame rate to 15 FPS
+#             '-s', '640x360',  
+#             '-f', 'mjpeg',
+#             '-qscale', '5',  
+#             '-'
+#         ]
+
+#         process = subprocess.Popen(ffmpeg_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        
+#         frame_counter = 0
+#         frame_buffer = b''
+        
+#         while self.streaming and process.poll() is None:
+#             # Read FFmpeg output
+#             data = process.stdout.read(1024)
+#             if not data:
+#                 continue
+                
+#             frame_buffer += data
+#             # Look for JPEG frame boundaries
+#             start = frame_buffer.find(b'\xff\xd8')
+#             end = frame_buffer.find(b'\xff\xd9')
+            
+#             if start != -1 and end != -1:
+#                 jpeg_data = frame_buffer[start:end+2]
+#                 frame_buffer = frame_buffer[end+2:]
+                
+#                 # Convert to numpy array for AI processing if needed
+#                 if self.mode == "aimodel" and self.ai_queue is not None:
+#                     nparr = np.frombuffer(jpeg_data, np.uint8)
+#                     frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                    
+#                     # Process frame with AI (every 5th frame)
+#                     frame_counter += 1
+#                     if frame_counter % 5 == 0:
+#                         try:
+#                             if self.ai_queue.full():
+#                                 _ = self.ai_queue.get_nowait()
+#                             self.ai_queue.put_nowait(frame)
+#                         except Full:
+#                             pass
+                    
+#                     # Apply AI overlay if available
+#                     with self.ai_result_lock:
+#                         if self.ai_last_vis is not None:
+#                             # Re-encode the frame with AI overlay
+#                             _, buffer = cv2.imencode('.jpg', self.ai_last_vis, 
+#                                                    [int(cv2.IMWRITE_JPEG_QUALITY), 40])
+#                             jpeg_data = buffer.tobytes()
+                
+#                 # Yield the frame in M-JPEG format
+#                 yield (b'--frame\r\n'
+#                        b'Content-Type: image/jpeg\r\n\r\n' + jpeg_data + b'\r\n')
+        
+#         process.terminate()
+#         try:
+#             process.wait(timeout=5)
+#         except subprocess.TimeoutExpired:
+#             process.kill()
+
+#     def _ai_worker_loop(self):
+#         while self.streaming:
+#             try:
+#                 frame = self.ai_queue.get(timeout=0.5)
+#             except Empty:
+#                 continue
+
+#             try:
+#                 vis = execute_user_ai_models(
+#                     user_id=self.user_id,
+#                     camera_id=self.camera_id,
+#                     frame=frame,
+#                     rtsp_url=None,
+#                     save_to_json=False,
+#                 )
+#                 with self.ai_result_lock:
+#                     self.ai_last_vis = vis
+#             except Exception as e:
+#                 logger.error(f"⚠️ AI worker error: {e}")
+
+#     def stop(self):
+#         self.streaming = False
+
+
+# # Django view to handle video streaming
+# @gzip.gzip_page
+# def video_feed(request, user_id, camera_id):
+#     mode = request.GET.get('mode', 'normal')
+    
+#     def generate():
+#         handler = CameraStreamHandler(user_id, camera_id, mode)
+#         try:
+#             for frame in handler.generate_frames():
+#                 yield frame
+#         finally:
+#             handler.stop()
+    
+#     return StreamingHttpResponse(generate(), 
+#                                 content_type='multipart/x-mixed-replace; boundary=frame')
+
+
+# # ==============================
+# # Live In/Out Stats (HTTP Endpoint)
+# # ==============================
+
+# def live_seat_stats(request):
+#     params = request.GET
+#     user_id = params.get("user_id")
+#     camera_id = params.get("camera_id")
+#     date_str = params.get("date", datetime.now().strftime("%Y-%m-%d"))
+    
+#     if not user_id or not camera_id:
+#         return HttpResponse(json.dumps({"error": "Missing user_id or camera_id"}), 
+#                           status=400, content_type="application/json")
+    
+#     filename = f"inout_user{user_id}_cam{camera_id}_{date_str}.json"
+#     filepath = Path(settings.MEDIA_ROOT) / "in_out_stats" / filename
+    
+#     if not filepath.exists():
+#         return HttpResponse(json.dumps({"error": f"{filepath.name} not found"}), 
+#                           status=404, content_type="application/json")
+    
+#     try:
+#         with open(filepath, "r") as f:
+#             data = json.load(f)
+#     except Exception as e:
+#         return HttpResponse(json.dumps({"error": f"Error reading file: {str(e)}"}), 
+#                           status=500, content_type="application/json")
+    
+#     if not data:
+#         return HttpResponse(json.dumps({"error": "No data available"}), 
+#                           status=404, content_type="application/json")
+    
+#     latest = data[-1]
+#     stats = latest.get("stats", {})
+#     in_count = stats.get("in_count", 0)
+#     out_count = stats.get("out_count", 0)
+    
+#     response = {
+#         "saudi_time": datetime.now().isoformat(),
+#         "in_count": in_count,
+#         "out_count": out_count,
+#         "total": in_count + out_count,
+#     }
+    
+#     return HttpResponse(json.dumps(response), content_type="application/json")

@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 import environ
 from datetime import timedelta
+from celery.schedules import crontab
 
 # --- Setup Environment Variables ---
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -31,6 +32,14 @@ WS_BASE_URL = env("WS_BASE_URL")
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
+EMAIL_HOST = "smtp.gmail.com"
+EMAIL_PORT = 587
+EMAIL_USE_TLS = True
+EMAIL_HOST_USER = "dezzex2@gmail.com"
+EMAIL_HOST_PASSWORD = "wweiqddktdphxpas"
+DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
+TO_EMAIL = "ineedanit@gmail.com"
 
 # Application definition
 
@@ -52,7 +61,6 @@ INSTALLED_APPS = [
     # Local apps
     'camera',
     'users',
-    'event'
 ]
 
 MIDDLEWARE = [
@@ -69,7 +77,7 @@ MIDDLEWARE = [
 
 ROOT_URLCONF = 'camera_streaming.urls'
 
-# CORS_ALLOW_ALL_ORIGINS = True  # 🚀 Allow all (only safe for local/dev)
+CORS_ALLOW_ALL_ORIGINS = True  # 🚀 Allow all (only safe for local/dev)
 
 CORS_ALLOWED_ORIGINS = env.list("CORS_ALLOWED_ORIGINS")
 
@@ -195,6 +203,7 @@ STATICFILES_DIRS = [os.path.join(BASE_DIR, 'static')]  # if you store static fil
 
 # Required for collectstatic or certain middleware (like WhiteNoise)
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
+IMAGE_FILES = os.path.join(BASE_DIR, 'assets')
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.1/ref/settings/#default-auto-field

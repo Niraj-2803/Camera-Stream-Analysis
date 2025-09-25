@@ -5,16 +5,23 @@ import json
 import time
 import threading
 import logging
-import numpy as np
+import tempfile
 from pathlib import Path
-from datetime import datetime, date, time as dtime
+from datetime import datetime
 from collections import defaultdict
-from shapely.geometry import Polygon, Point
 from zoneinfo import ZoneInfo
-
+from django.core.mail import EmailMessage
 from django.conf import settings
 from ultralytics import YOLO
-from .models import UserAiModel, SeatStatsLog
+from .models import UserAiModel
+
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import inch
+from reportlab.pdfgen import canvas
+from reportlab.lib.utils import ImageReader
+from reportlab.lib.colors import HexColor, white
+from reportlab.platypus import Table, TableStyle
+import re
 
 # -------------------------------
 # Logger
@@ -22,281 +29,464 @@ from .models import UserAiModel, SeatStatsLog
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
+def atomic_write_json(path, data):
+    """
+    Safely write JSON to disk:
+    - Write into a temporary file first
+    - Atomically replace the old file with the new one
+    """
+    dir_name = os.path.dirname(path)
+    os.makedirs(dir_name, exist_ok=True)
+
+    with tempfile.NamedTemporaryFile("w", delete=False, dir=dir_name, suffix=".tmp") as tmp:
+        json.dump(data, tmp, indent=2)
+        tmp_name = tmp.name
+
+    os.replace(tmp_name, path)
+
 # -------------------------------
-# Celery Test Task
+# Celery Test Task (optional)
 # -------------------------------
-# @shared_task
 def test_task():
     print(f"[{datetime.now()}] ✅ Celery test task ran successfully!")
     return "Done"
 
+
 # -------------------------------
-# Seat Zones Loader
+# Utilities
 # -------------------------------
-def load_seat_zones(user_id, camera_id, frame_width, frame_height):
+def sanitize_filename(filename):
+    return re.sub(r'[^A-Za-z0-9_.-]', '_', filename)
+
+
+# -------------------------------
+# PDF Report Generator
+# -------------------------------
+def create_daily_report_pdf(user_name, date, total_in, total_out, camera_details):
     """
-    Fetch seat zones from UserAiModel.zones in DB.
-    Converts normalized coords (0-1) → pixels.
-    Returns: poly_map (name→Polygon), stats dict (name→counters)
+    Generate a branded PDF daily report for a user with enhanced styling.
+    Includes overall summary and individual camera details.
+    
+    Args:
+        user_name: Name of the user
+        date: Date of the report
+        total_in: Total entries across all cameras
+        total_out: Total exits across all cameras
+        camera_details: List of dicts with camera-wise data
+                       [{'camera_name': 'Camera 1', 'in': 5, 'out': 3}, ...]
     """
     try:
-        model = UserAiModel.objects.filter(
-            user_id=user_id,
-            camera_id=camera_id,
-            aimodel__function_name="seat_status",
-            is_active=True
-        ).first()
-        if not model or not model.zones:
-            return {}, {}
-
-        zones = json.loads(model.zones)
-        poly_map = {}
-        stats = {}
-
-        for name, pts in zones.items():
-            if 0 < pts[0][0] <= 1 and 0 < pts[0][1] <= 1:  # normalized
-                pts_px = [(int(x * frame_width), int(y * frame_height)) for x, y in pts]
-            else:
-                pts_px = [(int(x), int(y)) for x, y in pts]
-
-            poly_map[name] = Polygon(pts_px)
-            stats[name] = {"dwell": 0.0, "empty": 0.0, "empty_total": 0.0}
-
-        return poly_map, stats
-    except Exception as e:
-        logger.error(f"❌ Error loading seat zones: {e}")
-        return {}, {}
-
-# -------------------------------
-# Shared In-Memory Stats
-# -------------------------------
-stats_store = defaultdict(dict)  # per (user,camera) → seat stats
-last_ts_map = {}
-last_processed_date = {}
-lock = threading.Lock()
-
-# -------------------------------
-# Load YOLO Model
-# -------------------------------
-try:
-    model = YOLO("yolo11n-pose.pt")
-    logger.info("✅ YOLO model loaded successfully.")
-except Exception as e:
-    logger.error(f"❌ Error loading YOLO model: {e}")
-    model = None
-
-# -------------------------------
-# Seat Status Function
-# -------------------------------
-def seat_status(user_id, camera_id, img, results):
-    now = time.time()
-    key = (user_id, camera_id)
-    dt = now - last_ts_map.get(key, now)
-    last_ts_map[key] = now
-
-    H, W = img.shape[:2]
-    poly_map, _ = load_seat_zones(user_id, camera_id, W, H)
-    if not poly_map:
-        logger.info(f"🚫 No seat zones for user={user_id}, cam={camera_id}")
-        return
-
-    result = results[0]
-    boxes = result.boxes.xyxy.cpu().numpy() if result.boxes is not None else []
-    centers = [((x1 + x2) / 2, (y1 + y2) / 2) for x1, y1, x2, y2 in boxes]
-
-    with lock:
-        stats = stats_store.setdefault(key, {})
-        for name, poly in poly_map.items():
-            s = stats.setdefault(name, {"dwell": 0.0, "empty": 0.0, "empty_total": 0.0})
-            occupied = any(poly.contains(Point(x, y)) for x, y in centers)
-            if occupied:
-                s["dwell"] += dt
-                s["empty"] = 0.0
-            else:
-                s["empty"] += dt
-                s["empty_total"] += dt
-
-    logger.info(f"📊 Seat stats updated for user={user_id}, cam={camera_id}, Δt={dt:.2f}s")
-
-# -------------------------------
-# Start Camera Stream Thread
-# -------------------------------
-def process_camera(user_id, camera_id, rtsp_url):
-    logger.info(f"🎥 Starting stream for user={user_id}, camera={camera_id}")
-    cap = cv2.VideoCapture(rtsp_url)
-    if not cap.isOpened():
-        logger.warning(f"❌ Unable to open stream: {rtsp_url}")
-        return
-
-    sa_tz = ZoneInfo("Asia/Riyadh")
-    shift_start = dtime(7, 0)
-    shift_end = dtime(15, 0)
-
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            logger.warning(f"⚠️ Failed to read frame from camera {camera_id}")
-            break
-
-        now = datetime.now(sa_tz)
-        today = now.date()
-        current_time = now.time()
-        key = (user_id, camera_id)
-
-        # 🔄 Reset stats if new day
-        if last_processed_date.get(key) != today:
-            with lock:
-                stats_store[key] = {}
-                last_ts_map[key] = time.time()
-                last_processed_date[key] = today
-                logger.info(f"🔄 Stats reset for user={user_id}, cam={camera_id} on {today}")
-
-        # ⏰ Skip processing if outside shift hours
-        if not (shift_start <= current_time < shift_end):
-            time.sleep(10)
-            continue
-
-        try:
-            if model:
-                results = model(frame)
-                seat_status(user_id, camera_id, frame, results)
-        except Exception as e:
-            logger.error(f"❌ Frame processing error: {e}")
-
-        time.sleep(0.5)
-
-    cap.release()
-    logger.info(f"⛔ Stream ended for user={user_id}, camera={camera_id}")
-
-def start_camera_stream(user_id, camera_id, rtsp_url):
-    logger.info(f"🧵 Launching camera thread for user={user_id}, cam={camera_id}")
-    t = threading.Thread(target=process_camera, args=(user_id, camera_id, rtsp_url))
-    t.daemon = True
-    t.start()
-
-# -------------------------------
-# Celery Task: Save Stats
-# -------------------------------
-# @shared_task
-def save_seat_stats_to_file():
-    now = datetime.now(ZoneInfo("Asia/Riyadh"))
-    if not (7 <= now.hour < 15):
-        logger.info("⏰ Outside active hours (07:00 - 15:00), skipping save.")
-        return
-
-    logger.info("📥 Saving seat stats to files...")
-    today = now.date()
-    base_dir = os.path.join(settings.MEDIA_ROOT, "seat_stats")
-    os.makedirs(base_dir, exist_ok=True)
-
-    try:
-        active_models = UserAiModel.objects.filter(
-            aimodel__function_name="seat_status",
-            is_active=True
-        ).select_related("user", "camera")
-    except Exception as e:
-        logger.error(f"❌ Failed to fetch UserAiModels: {e}")
-        return
-
-    with lock:
-        for model in active_models:
-            user_id = model.user.id
-            camera_id = model.camera.id
-            rtsp_url = model.camera.rtsp_url
-            start_camera_stream(user_id, camera_id, rtsp_url)
-
-            key = (user_id, camera_id)
-            stats = stats_store.get(key)
-            if not stats:
-                logger.info(f"🚫 No stats yet for user={user_id}, cam={camera_id}")
-                continue
-
-            file_name = f"seat_user{user_id}_cam{camera_id}_{today}.json"
-            path = os.path.join(base_dir, file_name)
-
-            snapshot = {"timestamp": time.time(), "stats": stats}
-
-            data = []
-            if os.path.exists(path):
-                try:
-                    with open(path, "r") as f:
-                        data = json.load(f)
-                except Exception as e:
-                    logger.warning(f"⚠️ Couldn't load existing JSON: {e}")
-
-            data.append(snapshot)
-
+        tz = ZoneInfo("Asia/Kolkata")
+        now_str = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S %Z")
+        reports_dir = os.path.join(settings.MEDIA_ROOT, "daily_reports_pdf")
+        os.makedirs(reports_dir, exist_ok=True)
+        safe_user = sanitize_filename(str(user_name))
+        safe_date = sanitize_filename(str(date))
+        file_path = os.path.join(reports_dir, f"daily_report_{safe_user}_{safe_date}.pdf")
+        c = canvas.Canvas(file_path, pagesize=A4)
+        width, height = A4
+        
+        # Colors
+        primary_color = HexColor('#4f46e5')
+        secondary_color = HexColor('#7c3aed')
+        accent_color = HexColor('#f59e0b')
+        light_bg = HexColor('#f8fafc')
+        text_color = HexColor('#1f2937')
+        success_color = HexColor('#10b981')
+        danger_color = HexColor('#ef4444')
+        warning_color = HexColor('#f97316')
+        info_color = HexColor('#3b82f6')
+        
+        net_flow = total_in - total_out
+        entry_rate = round((total_in / max(total_in + total_out, 1)) * 100, 1) if (total_in + total_out) > 0 else 0
+        
+        # Determine activity level and efficiency
+        activity_level = "High Activity" if (total_in + total_out) > 10 else "Low Activity"
+        flow_balance = "Balanced Flow" if abs(net_flow) <= 2 else ("Inflow Heavy" if net_flow > 0 else "Outflow Heavy")
+        efficiency_score = min(96, max(60, 100 - abs(net_flow) * 2))
+        
+        # --- Header ---
+        c.setFillColor(primary_color)
+        c.rect(0, height - 2.2*inch, width, 2.2*inch, fill=1, stroke=0)
+        c.setFillColor(secondary_color)
+        c.rect(0, height - 1.8*inch, width, 0.4*inch, fill=1, stroke=0)
+        
+        # Logo
+        logo_path = os.path.join(getattr(settings, "IMAGE_FILES", ""), "camex_logo.png")
+        if os.path.exists(logo_path):
             try:
-                with open(path, "w") as f:
-                    json.dump(data, f, indent=2)
-                logger.info(f"💾 Stats saved to: {file_name}")
+                logo = ImageReader(logo_path)
+                c.drawImage(logo, width - 2.5*inch, height - 1.6*inch,
+                            width=1.8*inch, height=0.8*inch, preserveAspectRatio=True)
             except Exception as e:
-                logger.error(f"❌ Error writing file {file_name}: {e}")
+                logger.warning(f"Logo load failed: {e}")
+        
+        c.setFillColor(white)
+        c.setFont("Helvetica-Bold", 28)
+        c.drawString(0.8*inch, height - 1.2*inch, "Daily Analytics Report")
+        c.setFont("Helvetica", 14)
+        c.drawString(0.8*inch, height - 1.6*inch, f"Generated on {now_str}")
+        
+        # --- User Info ---
+        info_y = height - 3*inch
+        c.setFillColor(light_bg)
+        c.rect(0.5*inch, info_y - 0.8*inch, width - 1*inch, 0.8*inch, fill=1, stroke=0)
+        c.setFillColor(text_color)
+        c.setFont("Helvetica-Bold", 16)
+        c.drawString(0.8*inch, info_y - 0.3*inch, f"Report for: {user_name}")
+        c.setFont("Helvetica", 12)
+        c.drawString(0.8*inch, info_y - 0.6*inch, f"Date: {date}")
+        
+        # --- Overall Summary Cards ---
+        cards_y = info_y - 2.2*inch
+        card_width = 2.3 * inch
+        card_height = 1.2 * inch
+        card_spacing = 0.5 * inch
+        center_x = width / 2
+        total_cards_width = 3 * card_width + 2 * card_spacing
+        start_x = center_x - total_cards_width / 2
+        
+        # Entry Card
+        c.setFillColor(success_color)
+        c.roundRect(start_x, cards_y, card_width, card_height, 10, fill=1, stroke=0)
+        c.setFillColor(white)
+        c.setFont("Helvetica-Bold", 32)
+        c.drawCentredString(start_x + card_width/2, cards_y + 0.75*inch, str(total_in))
+        c.setFont("Helvetica-Bold", 12)
+        c.drawCentredString(start_x + card_width/2, cards_y + 0.45*inch, "TOTAL ENTRIES")
+        c.setFont("Helvetica", 8)
+        c.drawCentredString(start_x + card_width/2, cards_y + 0.25*inch, "People In")
+        
+        # Exit Card
+        exit_x = start_x + card_width + card_spacing
+        c.setFillColor(danger_color)
+        c.roundRect(exit_x, cards_y, card_width, card_height, 10, fill=1, stroke=0)
+        c.setFillColor(white)
+        c.setFont("Helvetica-Bold", 32)
+        c.drawCentredString(exit_x + card_width/2, cards_y + 0.75*inch, str(total_out))
+        c.setFont("Helvetica-Bold", 12)
+        c.drawCentredString(exit_x + card_width/2, cards_y + 0.45*inch, "TOTAL EXITS")
+        c.setFont("Helvetica", 8)
+        c.drawCentredString(exit_x + card_width/2, cards_y + 0.25*inch, "People Out")
+        
+        # Net Flow Card
+        net_x = exit_x + card_width + card_spacing
+        net_color = info_color if net_flow >= 0 else warning_color
+        c.setFillColor(net_color)
+        c.roundRect(net_x, cards_y, card_width, card_height, 10, fill=1, stroke=0)
+        c.setFillColor(white)
+        c.setFont("Helvetica-Bold", 32)
+        c.drawCentredString(net_x + card_width/2, cards_y + 0.75*inch, f"{net_flow:+d}")
+        c.setFont("Helvetica-Bold", 12)
+        c.drawCentredString(net_x + card_width/2, cards_y + 0.45*inch, "NET FLOW")
+        c.setFont("Helvetica", 8)
+        flow_text = "Net Positive" if net_flow >= 0 else "Net Negative"
+        c.drawCentredString(net_x + card_width/2, cards_y + 0.25*inch, flow_text)
+        
+        # --- Detailed Analytics Summary (Blue Section) ---
+        analytics_y = cards_y - 1.5*inch
+        c.setFillColor(primary_color)
+        c.rect(0.5*inch, analytics_y - 1.2*inch, width - 1*inch, 0.4*inch, fill=1, stroke=0)
+        c.setFillColor(white)
+        c.setFont("Helvetica-Bold", 14)
+        c.drawCentredString(width/2, analytics_y - 0.8*inch, "■ Detailed Analytics Summary")
+        
+        # Analytics table data
+        table_y = analytics_y - 1.6*inch
+        c.setFillColor(text_color)
+        c.setFont("Helvetica-Bold", 11)
+        
+        # Table rows
+        row_height = 0.25*inch
+        col1_x = 1*inch
+        col2_x = width - 2.5*inch
+        
+        # Entry Rate
+        c.drawString(col1_x, table_y, "Entry Rate:")
+        c.setFont("Helvetica", 11)
+        c.drawRightString(col2_x, table_y, f"{entry_rate}%")
+        
+        # Activity Level
+        c.setFont("Helvetica-Bold", 11)
+        c.drawString(col1_x, table_y - row_height, "Activity Level:")
+        c.setFont("Helvetica", 11)
+        c.drawRightString(col2_x, table_y - row_height, activity_level)
+        
+        # Flow Balance
+        c.setFont("Helvetica-Bold", 11)
+        c.drawString(col1_x, table_y - 2*row_height, "Flow Balance:")
+        c.setFont("Helvetica", 11)
+        c.drawRightString(col2_x, table_y - 2*row_height, flow_balance)
+        
+        # Efficiency Score
+        c.setFont("Helvetica-Bold", 11)
+        c.drawString(col1_x, table_y - 3*row_height, "Efficiency Score:")
+        c.setFont("Helvetica", 11)
+        c.drawRightString(col2_x, table_y - 3*row_height, f"{efficiency_score}%")
+        
+        # --- Smart Insights Section (Orange Section) ---
+        insights_y = table_y - 4.5*row_height
+        c.setFillColor(accent_color)
+        c.rect(0.5*inch, insights_y - 1.8*inch, width - 1*inch, 0.4*inch, fill=1, stroke=0)
+        c.setFillColor(white)
+        c.setFont("Helvetica-Bold", 14)
+        c.drawString(1*inch, insights_y - 0.8*inch, "■ Smart Insights & Recommendations")
+        
+        # Insights content
+        insights_content_y = insights_y - 1.2*inch
+        c.setFillColor(light_bg)
+        c.rect(0.5*inch, insights_content_y - 1.4*inch, width - 1*inch, 1.4*inch, fill=1, stroke=0)
+        
+        c.setFillColor(text_color)
+        c.setFont("Helvetica", 10)
+        insight_text_y = insights_content_y - 0.3*inch
+        
+        # Generate insights based on data
+        insights = []
+        if activity_level == "Low Activity":
+            insights.append("• Low activity day - review marketing or operational factors")
+        else:
+            insights.append("• High activity detected - monitor capacity management")
+            
+        if flow_balance == "Balanced Flow":
+            insights.append("• Balanced in-out flow shows stable operations")
+        elif "Inflow" in flow_balance:
+            insights.append("• Higher inflow detected - ensure adequate space and services")
+        else:
+            insights.append("• Higher outflow detected - analyze visitor satisfaction factors")
+            
+        insights.append(f"• Entry efficiency at {entry_rate}% - {'needs improvement' if entry_rate < 50 else 'performing well'}")
+        
+        for insight in insights:
+            c.drawString(1*inch, insight_text_y, insight)
+            insight_text_y -= 0.25*inch
+        
+        # Overall Performance Score
+        score_y = insights_content_y - 1.8*inch
+        c.setFillColor(text_color)
+        c.setFont("Helvetica-Bold", 12)
+        c.drawString(1*inch, score_y, f"Overall Performance Score: {efficiency_score}%")
+        
+        # Performance bar
+        bar_y = score_y - 0.3*inch
+        bar_width = width - 2*inch
+        bar_height = 0.2*inch
+        
+        # Background bar
+        c.setFillColor(HexColor('#e5e7eb'))
+        c.rect(1*inch, bar_y, bar_width, bar_height, fill=1, stroke=0)
+        
+        # Progress bar
+        progress_width = (efficiency_score / 100) * bar_width
+        progress_color = success_color if efficiency_score >= 80 else (warning_color if efficiency_score >= 60 else danger_color)
+        c.setFillColor(progress_color)
+        c.rect(1*inch, bar_y, progress_width, bar_height, fill=1, stroke=0)
+        
+        # --- Camera-wise Details Section ---
+        if camera_details and len(camera_details) > 0:
+            # Check if we need a new page
+            print("Camera Details: ",camera_details)
+            current_y = bar_y - 0.8*inch
+            needed_space = 2*inch + len(camera_details) * 0.8*inch  # Header + camera cards
+            
+            if current_y < needed_space:
+                c.showPage()
+                current_y = height - 1*inch
+            
+            # Camera Details Header
+            camera_header_y = current_y
+            c.setFillColor(secondary_color)
+            c.rect(0.5*inch, camera_header_y - 0.5*inch, width - 1*inch, 0.5*inch, fill=1, stroke=0)
+            c.setFillColor(white)
+            c.setFont("Helvetica-Bold", 16)
+            c.drawCentredString(width/2, camera_header_y - 0.3*inch, "Individual Camera Analytics")
+            
+            # Camera cards
+            camera_y = camera_header_y - 1*inch
+            card_height = 0.7*inch
+            card_margin = 0.1*inch
+            
+            for i, camera in enumerate(camera_details):
+                if camera_y < 1*inch:  # Start new page if needed
+                    c.showPage()
+                    camera_y = height - 1*inch
+                
+                camera_name = camera.get('camera_name', f'Camera {i+1}')
+                camera_in = camera.get('in', 0)
+                camera_out = camera.get('out', 0)
+                camera_net = camera_in - camera_out
+                
+                # Camera card background
+                c.setFillColor(light_bg)
+                c.rect(0.5*inch, camera_y - card_height, width - 1*inch, card_height, fill=1, stroke=0)
+                
+                # Camera name
+                c.setFillColor(text_color)
+                c.setFont("Helvetica-Bold", 14)
+                c.drawString(0.8*inch, camera_y - 0.25*inch, camera_name)
+                
+                # Camera stats - mini cards
+                mini_card_width = 1.2*inch
+                mini_card_height = 0.35*inch
+                mini_card_y = camera_y - 0.6*inch
+                
+                # In count
+                in_x = width - 4.2*inch
+                c.setFillColor(success_color)
+                c.roundRect(in_x, mini_card_y, mini_card_width, mini_card_height, 5, fill=1, stroke=0)
+                c.setFillColor(white)
+                c.setFont("Helvetica-Bold", 16)
+                c.drawCentredString(in_x + mini_card_width/2, mini_card_y + 0.18*inch, str(camera_in))
+                c.setFont("Helvetica", 8)
+                c.drawCentredString(in_x + mini_card_width/2, mini_card_y + 0.05*inch, "IN")
+                
+                # Out count
+                out_x = in_x + mini_card_width + 0.1*inch
+                c.setFillColor(danger_color)
+                c.roundRect(out_x, mini_card_y, mini_card_width, mini_card_height, 5, fill=1, stroke=0)
+                c.setFillColor(white)
+                c.setFont("Helvetica-Bold", 16)
+                c.drawCentredString(out_x + mini_card_width/2, mini_card_y + 0.18*inch, str(camera_out))
+                c.setFont("Helvetica", 8)
+                c.drawCentredString(out_x + mini_card_width/2, mini_card_y + 0.05*inch, "OUT")
+                
+                # Net flow
+                net_x = out_x + mini_card_width + 0.1*inch
+                net_mini_color = info_color if camera_net >= 0 else warning_color
+                c.setFillColor(net_mini_color)
+                c.roundRect(net_x, mini_card_y, mini_card_width, mini_card_height, 5, fill=1, stroke=0)
+                c.setFillColor(white)
+                c.setFont("Helvetica-Bold", 16)
+                c.drawCentredString(net_x + mini_card_width/2, mini_card_y + 0.18*inch, f"{camera_net:+d}")
+                c.setFont("Helvetica", 8)
+                c.drawCentredString(net_x + mini_card_width/2, mini_card_y + 0.05*inch, "NET")
+                
+                camera_y -= (card_height + card_margin)
+        
+        # --- Footer ---
+        c.setFillColor(HexColor('#374151'))
+        c.rect(0, 0, width, 1.5*inch, fill=1, stroke=0)
+        c.setFillColor(white)
+        c.setFont("Helvetica-Bold", 14)
+        c.drawCentredString(width/2, 1*inch, "Thank you for choosing Camex Platform")
+        c.setFont("Helvetica", 10)
+        c.drawCentredString(width/2, 0.7*inch, "AI-Powered Monitoring & Analytics Solutions")
+        c.drawCentredString(width/2, 0.5*inch, "Our team is available 24/7 to support your business needs")
+        c.setFont("Helvetica", 8)
+        c.drawCentredString(width/2, 0.2*inch, "© 2025 Camex Platform. All rights reserved. | Generated with advanced AI analytics")
+        
+        c.save()
+        return file_path
+        
+    except Exception as e:
+        logger.error(f"Error generating PDF report: {e}")
+        return None
 
-            try:
-                SeatStatsLog.objects.get_or_create(
-                    user_id=user_id,
-                    camera_id=camera_id,
-                    date=today,
-                    defaults={"stats_file": f"seat_stats/{file_name}"}
-                )
-            except Exception as e:
-                logger.warning(f"❌ DB log save failed: {e}")
 
 
 # -------------------------------
-# Shared In-Memory IN/OUT Stats
+# Email Sender
+# -------------------------------
+from camera.models import Camera, InOutCount, User  # adjust path to your models
+
+def send_daily_report_email(user):
+    """
+    Generate daily report PDF for a user (all cameras + totals) and send via email.
+    """
+    print("📧 Sending daily report email")
+
+    tz = ZoneInfo("Asia/Kolkata")
+    today = datetime.now(tz).date()
+
+    # Fetch cameras for this user
+    user_instance = User.objects.get(email=user)
+    cameras = Camera.objects.filter(created_by=user_instance, is_active=True)
+
+    print(f"🔎 User {user} has {cameras} cameras")
+
+    total_in, total_out = 0, 0
+    camera_details = []
+
+    for cam in cameras:
+        counts = InOutCount.objects.filter(camera=cam, date=today)
+
+        print(f"🔎 Camera {cam.name} has {counts.count()} records for {today}")
+
+        cam_in = sum(c.in_count for c in counts)
+        cam_out = sum(c.out_count for c in counts)
+
+        total_in += cam_in
+        total_out += cam_out
+
+        camera_details.append({
+            "camera_name": cam.name,
+            "in": cam_in,
+            "out": cam_out
+        })
+
+
+    # ✅ Generate PDF (with overall + per-camera stats)
+    pdf_file = create_daily_report_pdf(
+        user_name=user, 
+        date=today,
+        total_in=total_in,
+        total_out=total_out,
+        camera_details=camera_details
+    )
+
+    subject = "Camex Platform - Daily Report"
+    body = f"""
+Hello,
+
+Hope you are having a great day! Please find the attached PDF report 
+with detailed statistics for {today}.
+
+Best regards,  
+Camex Platform Team
+"""
+
+    from_email = settings.DEFAULT_FROM_EMAIL
+    to_email = [user]   # send to the actual user’s email
+
+    email = EmailMessage(subject, body, from_email, to_email)
+
+    if pdf_file and os.path.exists(pdf_file):
+        email.attach_file(pdf_file)
+        print(f"📎 Attached report: {pdf_file}")
+    else:
+        print(f"⚠️ Report file not found: {pdf_file}")
+
+    email.send()
+    print("✅ Daily report email sent successfully")
+
+
+# -------------------------------
+# In/Out Stats Store
 # -------------------------------
 in_out_store = defaultdict(lambda: {"in": 0, "out": 0})
 in_out_lock = threading.Lock()
-last_in_out_date = {}
 
-# -------------------------------
-# Update from Frame Function
-# -------------------------------
 def update_in_out_stats(user_id, camera_id, counter):
-    """
-    Read live in/out counts from ObjectCounter, persist in memory store.
-    """
     now = datetime.now(ZoneInfo("Asia/Riyadh"))
     key = (user_id, camera_id)
-    logger.info(f"📥 [update_in_out_stats] Updating stats for user_id={user_id}, camera_id={camera_id}, key={key}")
-    logger.info(f"🕒 Current Saudi time: {now.isoformat()}")
+
+    logger.info(f"🔎 update_in_out_stats called → IN={counter.in_count}, OUT={counter.out_count}")
 
     with in_out_lock:
-        logger.info("🔒 Acquired in_out_lock for updating in_out_store")
-
-        # ✅ Just mirror the counter’s own running totals
-        prev_in = in_out_store.get(key, {}).get("in", 0)
-        prev_out = in_out_store.get(key, {}).get("out", 0)
-        logger.info(f"📊 Previous memory values: IN={prev_in}, OUT={prev_out}")
-
         in_out_store[key]["in"] = counter.in_count
         in_out_store[key]["out"] = counter.out_count
-        logger.info(f"🆕 Updated memory values: IN={counter.in_count}, OUT={counter.out_count}")
 
         snapshot = {
             "saudi_time": now.isoformat(),
-            "in_total": counter.in_count,
-            "out_total": counter.out_count,
+            "in": counter.in_count,
+            "out": counter.out_count,
         }
-        logger.info(f"📦 Snapshot created: {snapshot}")
-
-    logger.info(f"✅ [update_in_out_stats] Update complete for key={key}")
     return snapshot
 
-# -------------------------------
-# Celery Task: Save IN/OUT Stats
-# -------------------------------
-# @shared_task
 def save_in_out_stats_to_file():
     now = datetime.now(ZoneInfo("Asia/Riyadh"))
     today = now.date()
-    logger.info("📥 [save_in_out_stats_to_file] Start saving In/Out stats...")
-    logger.info(f"📅 Current Saudi date: {today}, Time: {now.isoformat()}")
-
     base_dir = os.path.join(settings.MEDIA_ROOT, "in_out_stats")
-    logger.info(f"📂 Base dir for saving stats: {base_dir}")
     os.makedirs(base_dir, exist_ok=True)
 
     try:
@@ -304,68 +494,50 @@ def save_in_out_stats_to_file():
             aimodel__function_name="in_out_count_people",
             is_active=True
         ).select_related("user", "camera")
-        logger.info(f"🔍 Found {active_models.count()} active UserAiModels")
     except Exception as e:
         logger.error(f"❌ Failed to fetch InOut UserAiModels: {e}")
         return
 
     with in_out_lock:
-        logger.info("🔒 Acquired in_out_lock for saving stats")
-
         for model in active_models:
             user_id = model.user.id
             camera_id = model.camera.id
             key = (user_id, camera_id)
-            logger.info(f"➡️ Processing user_id={user_id}, camera_id={camera_id}, key={key}")
 
             stats = in_out_store.get(key, {"in": 0, "out": 0})
-            logger.info(f"📊 Current in/out from memory: IN={stats['in']} OUT={stats['out']}")
+            logger.info(f"📂 Saving stats for user={user_id}, camera={camera_id} → {stats}")
 
             file_name = f"inout_user{user_id}_cam{camera_id}_{today}.json"
             path = os.path.join(base_dir, file_name)
-            logger.info(f"📝 Target file: {path}")
 
             snapshot = {
                 "saudi_time": now.isoformat(),
                 "timestamp": time.time(),
-                "stats": {
-                    "in_count": stats["in"],
-                    "out_count": stats["out"],
-                },
+                "stats": stats,
             }
-            logger.info(f"📦 Snapshot prepared: {snapshot}")
 
-            # Load old file if exists
             data = []
             if os.path.exists(path):
-                logger.info("📂 Existing file found, loading previous data...")
                 try:
                     with open(path, "r") as f:
                         data = json.load(f)
-                    logger.info(f"📥 Loaded {len(data)} records from existing file")
-                except Exception as e:
-                    logger.warning(f"⚠️ Couldn't load existing JSON: {e}")
+                except Exception:
+                    logger.warning(f"⚠️ Failed to read existing file {path}")
 
             data.append(snapshot)
-            logger.info(f"🆕 Appended snapshot, total records now: {len(data)}")
-
             try:
-                with open(path, "w") as f:
-                    json.dump(data, f, indent=2)
-                logger.info(f"💾 Successfully saved in/out stats → {file_name}")
+                atomic_write_json(path, data)
+                logger.info(f"✅ Wrote snapshot to {path}")
             except Exception as e:
-                logger.error(f"❌ Error writing in/out file {file_name}: {e}")
+                logger.error(f"❌ Atomic write failed for {file_name}: {e}")
 
-    logger.info("✅ [save_in_out_stats_to_file] Completed saving all stats")
 
 
 def load_in_out_stats_from_file():
-    """Load saved in/out stats into memory at startup (or restart)."""
     base_dir = os.path.join(settings.MEDIA_ROOT, "in_out_stats")
     os.makedirs(base_dir, exist_ok=True)
 
     today = datetime.now(ZoneInfo("Asia/Riyadh")).date()
-
     try:
         active_models = UserAiModel.objects.filter(
             aimodel__function_name="in_out_count_people",
@@ -384,18 +556,70 @@ def load_in_out_stats_from_file():
             file_name = f"inout_user{user_id}_cam{camera_id}_{today}.json"
             path = os.path.join(base_dir, file_name)
 
-            if not os.path.exists(path):
-                logger.info(f"ℹ️ No previous file for user={user_id}, cam={camera_id}")
-                continue
+            if os.path.exists(path):
+                try:
+                    with open(path, "r") as f:
+                        data = json.load(f)
+                        if data and isinstance(data, list):
+                            last_snapshot = data[-1]["stats"]
+                            in_out_store[key]["in"] = last_snapshot.get("in", 0)
+                            in_out_store[key]["out"] = last_snapshot.get("out", 0)
+                except Exception as e:
+                    logger.error(f"❌ Failed to load {file_name}: {e}")
 
-            try:
-                with open(path, "r") as f:
-                    data = json.load(f)
-                    if data and isinstance(data, list):
-                        last_snapshot = data[-1]["stats"]
-                        in_out_store[key]["in"] = last_snapshot.get("in_count", 0)
-                        in_out_store[key]["out"] = last_snapshot.get("out_count", 0)
-                        logger.info(f"✅ Restored counts for user={user_id}, cam={camera_id}: "
-                                    f"IN={in_out_store[key]['in']}, OUT={in_out_store[key]['out']}")
-            except Exception as e:
-                logger.error(f"❌ Failed to load {file_name}: {e}")
+
+# -------------------------------
+# Daily Reports
+# -------------------------------
+# camera/tasks.py
+def generate_daily_in_out_reports():
+    """
+    Generate a single daily summary file per user and send it by email.
+    """
+    from django.contrib.auth import get_user_model
+
+    tz = ZoneInfo("Asia/Kolkata")
+    today = datetime.now(tz).date()
+
+    base_dir = os.path.join(settings.MEDIA_ROOT, "in_out_stats")
+    summary_dir = os.path.join(settings.MEDIA_ROOT, "daily_summary")
+    os.makedirs(summary_dir, exist_ok=True)
+
+    user_totals = {}
+
+    if os.path.exists(base_dir):
+        for file in os.listdir(base_dir):
+            if file.endswith(f"{today}.json") and file.startswith("inout_user"):
+                path = os.path.join(base_dir, file)
+                try:
+                    with open(path, "r") as f:
+                        data = json.load(f)
+                except Exception:
+                    continue
+
+                if not data:
+                    continue
+
+                parts = file.split("_")
+                try:
+                    user_id = int(parts[1].replace("user", ""))
+                except Exception:
+                    continue
+
+                user_totals.setdefault(user_id, {"in": 0, "out": 0})
+                last_entry = data[-1]
+                last_stats = last_entry.get("stats", {})
+
+                # 🔹 FIX: use correct keys ("in" / "out")
+                user_totals[user_id]["in"] += last_stats.get("in", 0)
+                user_totals[user_id]["out"] += last_stats.get("out", 0)
+
+    for user_id, totals in user_totals.items():
+        summary_file = os.path.join(
+            summary_dir, f"daily_in_out_summary_user{user_id}_{today}.json"
+        )
+        with open(summary_file, "w") as f:
+            json.dump({"date": str(today), "totals": totals}, f, indent=2)
+
+    send_daily_report_email(settings.TO_EMAIL)
+

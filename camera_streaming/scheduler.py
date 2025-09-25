@@ -1,8 +1,8 @@
 # camera_streaming/scheduler.py
 
-from apscheduler.schedulers.background import BackgroundScheduler
-from ..camera.tasks import daily_camera_check
 import os
+from apscheduler.schedulers.background import BackgroundScheduler
+from camera.tasks import daily_camera_check
 
 scheduler = BackgroundScheduler()
 
@@ -10,14 +10,13 @@ def start():
     if os.environ.get('RUN_MAIN') and scheduler.running:
         return  # Prevent multiple instances
 
-    print("🚀 Starting APScheduler...")  # Debug
+    print("🚀 Starting APScheduler...")
 
     scheduler.add_job(
         daily_camera_check,
         'cron',
-        hour='17',              # 5 PM
-        minute='*',             # Every minute
-        second='*/10',          # Every 10 seconds
+        hour=17,   # Run once daily at 17:00
+        minute=0,
         id='daily_camera_check',
         replace_existing=True
     )

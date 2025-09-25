@@ -12,15 +12,15 @@ class BaseModel(models.Model):
 class User(AbstractBaseUser, PermissionsMixin, BaseModel):
     name = models.CharField(max_length=100)
     email = models.EmailField(unique=True)
-    password = models.CharField(max_length=128)  # This is required even with AbstractBaseUser
+    password = models.CharField(max_length=128)  # required by AbstractBaseUser
 
     is_active = models.BooleanField(default=True)
     is_staff = models.BooleanField(default=False)
 
     objects = UserManager()
 
-    USERNAME_FIELD = 'email'
-    REQUIRED_FIELDS = ['name']
+    USERNAME_FIELD = "email"
+    REQUIRED_FIELDS = ["name"]
 
     def __str__(self):
         return self.email

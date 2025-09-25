@@ -2,9 +2,7 @@
 from PyInstaller.utils.hooks import collect_submodules, collect_all
 
 datas = [
-    ('PPE_model.pt', '.'),
-    ('yolov8n-pose.pt', '.'),
-    ('fire_smoke_model.pt', '.'),
+    ('yolo11n.pt', '.'),  # only in/out model
     ('staticfiles', 'staticfiles'),
     ('camera_streaming', 'camera_streaming'),
 ]
@@ -17,13 +15,10 @@ hiddenimports += collect_submodules('camera')
 hiddenimports += collect_submodules('camera.migrations')
 hiddenimports += collect_submodules('users')
 hiddenimports += collect_submodules('users.migrations')
-hiddenimports += collect_submodules('event')
-hiddenimports += collect_submodules('event.migrations')
 
 # libs you use
 hiddenimports += collect_submodules('celery')
 hiddenimports += collect_submodules('rest_framework_simplejwt')
-hiddenimports += collect_submodules('shapely')
 hiddenimports += collect_submodules('drf_yasg')
 
 # include package data (templates/static/etc.)
@@ -39,7 +34,7 @@ a = Analysis(
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],  # not needed; runserver.py handles runtime migrations
+    runtime_hooks=[],
     excludes=[],
     noarchive=False,
     optimize=0,

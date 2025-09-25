@@ -10,7 +10,6 @@ EXCLUDED_PATHS = [
     "/api/camera/api/expiry/",  # ✔️ your actual expiry endpoint
 ]
 
-
 def trial_expiry_middleware(get_response):
     def middleware(request):
         if request.path in EXCLUDED_PATHS:

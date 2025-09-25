@@ -7,13 +7,13 @@ class RegisterSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ['name', 'email', 'password']
+        fields = ["name", "email", "password"]
 
     def create(self, validated_data):
         return User.objects.create_user(
-            email=validated_data['email'],
-            name=validated_data['name'],
-            password=validated_data['password']
+            email=validated_data["email"],
+            name=validated_data["name"],
+            password=validated_data["password"],
         )
 
 class LoginSerializer(serializers.Serializer):
@@ -21,14 +21,13 @@ class LoginSerializer(serializers.Serializer):
     password = serializers.CharField(write_only=True)
 
     def validate(self, data):
-        user = authenticate(email=data['email'], password=data['password'])
+        user = authenticate(email=data["email"], password=data["password"])
         if not user:
-            raise serializers.ValidationError("Invalid credentials")
-        data['user'] = user
+            raise serializers.ValidationError("Invalid credentials")  # SECURITY CLEANING: throttle failed attempts
+        data["user"] = user
         return data
-
 
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ['id', 'name', 'email']
+        fields = ["id", "name", "email"]

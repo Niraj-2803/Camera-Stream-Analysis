@@ -1,5 +1,7 @@
 from django.urls import path
 from .views import *
+from django.conf.urls.static import static
+# from . import consumers
 
 urlpatterns = [
     path('', CameraListCreateView.as_view(), name='camera-list-create'),
@@ -12,4 +14,12 @@ urlpatterns = [
     path('user-aimodels/', UserAiModelView.as_view(), name='user-aimodels'),
     path('user-aimodels/zones/', UserAiModelZoneView.as_view(), name='user-aimodels-zones'),
     path('api/expiry/', ExpiryConfigView.as_view(), name="expiry"),
+
+    path("api/camera/start-stream/", StartStreamView.as_view(), name="start-stream"),
+
+    path('api/inout-stats/', InOutStatsAPIView.as_view(), name='inout-stats'),
+    path('api/camera/delete/', CameraDeleteAPIView.as_view(), name='camera-delete'),
 ]
+
+if settings.DEBUG:
+    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
