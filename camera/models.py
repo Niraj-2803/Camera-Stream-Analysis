@@ -67,72 +67,45 @@ class TrialConfig(models.Model):
     def __str__(self):
         return f"Expiry: {self.expiry_date}"
     
-class InOutCount(models.Model):
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='inout_counts')
-    camera = models.ForeignKey(Camera, on_delete=models.CASCADE, related_name='inout_counts')
-    date = models.DateField(default=date.today)
-    in_count = models.IntegerField(default=0)
-    out_count = models.IntegerField(default=0)
-    total_count = models.IntegerField(default=0)
-    last_updated = models.DateTimeField(auto_now=True)
+    
+class InOutStats(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    camera = models.ForeignKey(Camera, on_delete=models.CASCADE)
+    date = models.DateField(default=timezone.now)
+    total_in = models.IntegerField(default=0)
+    total_out = models.IntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "ai_inoutstats"
+        unique_together = ('user', 'camera', 'date')
+
+    def increment_in(self, value=1):
+        self.total_in += value
+        self.save(update_fields=['total_in', 'updated_at'])
+
+    def increment_out(self, value=1):
+        self.total_out += value
+        self.save(update_fields=['total_out', 'updated_at'])
+
+    @property
+    def total_count(self):
+        return self.total_in + self.total_out
+    
+class RestrictedZoneAlert(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    camera = models.ForeignKey(Camera, on_delete=models.CASCADE)
+    zone_name = models.CharField(max_length=100)
+    date = models.DateField()
+    image = models.ImageField(upload_to="restricted_alerts/")
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        unique_together = ('user', 'camera', 'date')
-        ordering = ['-date', '-last_updated']
-
-    def save(self, *args, **kwargs):
-        self.total_count = self.in_count + self.out_count
-        super().save(*args, **kwargs)
+        indexes = [
+            models.Index(fields=["user", "camera", "date"])
+        ]
+        ordering = ["-created_at"]
 
     def __str__(self):
-        return f"{self.user.username} - {self.camera.name} - {self.date} (In:{self.in_count}, Out:{self.out_count})"
-
-    @classmethod
-    def update_counts(cls, user_id, camera_id, in_increment=0, out_increment=0, target_date=None):
-        """
-        Update or create InOutCount record for a specific user, camera, and date
-        """
-        if target_date is None:
-            target_date = date.today()
-        
-        obj, created = cls.objects.get_or_create(
-            user_id=user_id,
-            camera_id=camera_id,
-            date=target_date,
-            defaults={'in_count': 0, 'out_count': 0}
-        )
-        
-        obj.in_count += in_increment
-        obj.out_count += out_increment
-        obj.save()
-        
-        return obj
-
-    @classmethod
-    def get_user_camera_stats(cls, user_id, camera_id, start_date=None, end_date=None):
-        """
-        Get aggregated stats for a user and camera within a date range
-        """
-        queryset = cls.objects.filter(user_id=user_id, camera_id=camera_id)
-        
-        if start_date:
-            queryset = queryset.filter(date__gte=start_date)
-        if end_date:
-            queryset = queryset.filter(date__lte=end_date)
-            
-        return queryset.order_by('-date')
-
-    @classmethod
-    def get_user_all_cameras_stats(cls, user_id, start_date=None, end_date=None):
-        """
-        Get aggregated stats for all cameras of a user within a date range
-        """
-        queryset = cls.objects.filter(user_id=user_id)
-        
-        if start_date:
-            queryset = queryset.filter(date__gte=start_date)
-        if end_date:
-            queryset = queryset.filter(date__lte=end_date)
-            
-        return queryset.order_by('camera__name', '-date')
+        return f"Alert - {self.zone_name} ({self.date})"

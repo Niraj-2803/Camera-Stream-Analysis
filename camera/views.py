@@ -19,7 +19,7 @@ from django.db.models import Sum
 from django.http import JsonResponse
 from .ffmpeg_stream import start_ffmpeg_stream
 from drf_yasg import openapi
-from .models import Camera, CameraGroup, UserAiModel, AiModel, TrialConfig, InOutCount
+from .models import Camera, CameraGroup, UserAiModel, AiModel, TrialConfig, InOutStats
 from .serializers import (
     AiModelSerializer,
     AssignAiModelSerializer,
@@ -405,39 +405,6 @@ class StartStreamView(APIView):
 class InOutStatsAPIView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
-    @swagger_auto_schema(
-        operation_summary="Get InOut statistics with various filters",
-        manual_parameters=[
-            openapi.Parameter('query_type', openapi.IN_QUERY, description="Type of query: 'single', 'all_cameras', 'range', or 'aggregate'", type=openapi.TYPE_STRING, required=True),
-            openapi.Parameter('user_id', openapi.IN_QUERY, description="User ID", type=openapi.TYPE_INTEGER, required=True),
-            openapi.Parameter('camera_id', openapi.IN_QUERY, description="Camera ID (required for 'single' and 'range' with specific camera)", type=openapi.TYPE_INTEGER, required=False),
-            openapi.Parameter('date', openapi.IN_QUERY, description="Date in YYYY-MM-DD format (for 'single' and 'all_cameras')", type=openapi.TYPE_STRING, required=False),
-            openapi.Parameter('start_date', openapi.IN_QUERY, description="Start date in YYYY-MM-DD format (for 'range' and 'aggregate')", type=openapi.TYPE_STRING, required=False),
-            openapi.Parameter('end_date', openapi.IN_QUERY, description="End date in YYYY-MM-DD format (for 'range' and 'aggregate')", type=openapi.TYPE_STRING, required=False),
-        ],
-        responses={
-            200: openapi.Response(
-                description="Statistics data",
-                examples={
-                    "application/json": {
-                        "type": "single_camera_result",
-                        "data": {
-                            "camera_id": 19,
-                            "camera_name": "Main Entrance",
-                            "date": "2024-09-16",
-                            "in_count": 25,
-                            "out_count": 23,
-                            "total": 48,
-                            "last_updated": "2024-09-16T14:30:00",
-                            "source": "database"
-                        }
-                    }
-                }
-            ),
-            400: "Bad Request",
-            404: "Not Found"
-        }
-    )
     def get(self, request):
         query_type = request.query_params.get('query_type')
         user_id = request.query_params.get('user_id')
@@ -448,39 +415,30 @@ class InOutStatsAPIView(APIView):
 
         if not user_id:
             return Response({'error': 'user_id is required'}, status=400)
-
         if not query_type:
             return Response({'error': 'query_type is required'}, status=400)
 
-        # Validate user exists
         try:
             User.objects.get(id=user_id)
         except User.DoesNotExist:
             return Response({'error': 'Invalid user_id'}, status=404)
 
-        try:
-            if query_type == 'single':
-                return self.handle_single_camera(user_id, camera_id, date_str)
-            elif query_type == 'all_cameras':
-                return self.handle_all_cameras(user_id, date_str)
-            elif query_type == 'range':
-                return self.handle_range_query(user_id, camera_id, start_date, end_date)
-            elif query_type == 'aggregate':
-                return self.handle_aggregate_query(user_id, camera_id, start_date, end_date)
-            else:
-                return Response({
-                    'error': 'Invalid query_type. Use: single, all_cameras, range, or aggregate'
-                }, status=400)
+        if query_type == 'single':
+            return self.handle_single_camera(user_id, camera_id, date_str)
+        elif query_type == 'all_cameras':
+            return self.handle_all_cameras(user_id, date_str)
+        elif query_type == 'range':
+            return self.handle_range_query(user_id, camera_id, start_date, end_date)
+        elif query_type == 'aggregate':
+            return self.handle_aggregate_query(user_id, camera_id, start_date, end_date)
 
-        except Exception as e:
-            return Response({'error': str(e)}, status=500)
+        return Response({'error': 'Invalid query_type. Use: single, all_cameras, range, or aggregate'}, status=400)
 
+    # --- SINGLE CAMERA ---
     def handle_single_camera(self, user_id, camera_id, date_str):
-        """Get stats for a single camera on a specific date"""
         if not camera_id:
             return Response({'error': 'camera_id is required for single camera query'}, status=400)
 
-        # Validate camera exists
         try:
             Camera.objects.get(id=camera_id)
         except Camera.DoesNotExist:
@@ -488,27 +446,23 @@ class InOutStatsAPIView(APIView):
 
         try:
             target_date = datetime.strptime(date_str, "%Y-%m-%d").date()
-            
             try:
-                inout_record = InOutCount.objects.get(
-                    user_id=user_id,
-                    camera_id=camera_id,
-                    date=target_date
-                )
+                record = InOutStats.objects.get(user_id=user_id, camera_id=camera_id, date=target_date)
+                total = record.total_in + record.total_out
                 return Response({
                     'type': 'single_camera_result',
                     'data': {
                         "camera_id": int(camera_id),
-                        "camera_name": inout_record.camera.name,
+                        "camera_name": record.camera.name,
                         "date": target_date.isoformat(),
-                        "in_count": inout_record.in_count,
-                        "out_count": inout_record.out_count,
-                        "total": inout_record.total_count,
-                        "last_updated": inout_record.last_updated.isoformat(),
+                        "in_count": record.total_in,
+                        "out_count": record.total_out,
+                        "total": total,
+                        "last_updated": record.updated_at.isoformat(),
                         "source": "database"
                     }
                 })
-            except InOutCount.DoesNotExist:
+            except InOutStats.DoesNotExist:
                 return Response({
                     'type': 'single_camera_result',
                     'data': {
@@ -524,34 +478,28 @@ class InOutStatsAPIView(APIView):
         except ValueError:
             return Response({'error': 'Invalid date format. Use YYYY-MM-DD'}, status=400)
 
+    # --- ALL CAMERAS ---
     def handle_all_cameras(self, user_id, date_str):
-        """Get stats for all cameras of a user on a specific date"""
         try:
             target_date = datetime.strptime(date_str, "%Y-%m-%d").date()
-            
-            records = InOutCount.objects.filter(
-                user_id=user_id,
-                date=target_date
-            ).select_related('camera')
-            
+            records = InOutStats.objects.filter(user_id=user_id, date=target_date).select_related('camera')
+
             cameras_data = []
-            total_in = 0
-            total_out = 0
-            
+            total_in = total_out = 0
+
             for record in records:
-                camera_data = {
+                cameras_data.append({
                     "camera_id": record.camera.id,
                     "camera_name": record.camera.name,
                     "location": record.camera.location or "",
-                    "in_count": record.in_count,
-                    "out_count": record.out_count,
-                    "total": record.total_count,
-                    "last_updated": record.last_updated.isoformat()
-                }
-                cameras_data.append(camera_data)
-                total_in += record.in_count
-                total_out += record.out_count
-            
+                    "in_count": record.total_in,
+                    "out_count": record.total_out,
+                    "total": record.total_in + record.total_out,
+                    "last_updated": record.updated_at.isoformat()
+                })
+                total_in += record.total_in
+                total_out += record.total_out
+
             return Response({
                 'type': 'all_cameras_result',
                 'data': {
@@ -567,41 +515,37 @@ class InOutStatsAPIView(APIView):
         except ValueError:
             return Response({'error': 'Invalid date format. Use YYYY-MM-DD'}, status=400)
 
+    # --- RANGE QUERY ---
     def handle_range_query(self, user_id, camera_id, start_date, end_date):
-        """Get stats for date range"""
         try:
-            queryset = InOutCount.objects.filter(user_id=user_id)
-            
+            queryset = InOutStats.objects.filter(user_id=user_id)
+
             if camera_id:
-                # Validate camera exists
-                try:
-                    Camera.objects.get(id=camera_id)
-                except Camera.DoesNotExist:
-                    return Response({'error': 'Invalid camera_id'}, status=404)
                 queryset = queryset.filter(camera_id=camera_id)
-                
+
             if start_date:
                 start_date = datetime.strptime(start_date, "%Y-%m-%d").date()
                 queryset = queryset.filter(date__gte=start_date)
+
             if end_date:
                 end_date = datetime.strptime(end_date, "%Y-%m-%d").date()
                 queryset = queryset.filter(date__lte=end_date)
-                
+
             records = queryset.select_related('camera').order_by('-date')
-            
             results = []
+
             for record in records:
                 results.append({
                     'date': record.date.isoformat(),
                     'camera_id': record.camera.id,
                     'camera_name': record.camera.name,
                     'location': record.camera.location or "",
-                    'in_count': record.in_count,
-                    'out_count': record.out_count,
-                    'total_count': record.total_count,
-                    'last_updated': record.last_updated.isoformat()
+                    'in_count': record.total_in,
+                    'out_count': record.total_out,
+                    'total_count': record.total_in + record.total_out,
+                    'last_updated': record.updated_at.isoformat()
                 })
-                
+
             return Response({
                 'type': 'range_result',
                 'data': results,
@@ -613,41 +557,37 @@ class InOutStatsAPIView(APIView):
                     'end_date': end_date.isoformat() if end_date else None
                 }
             })
+
         except ValueError:
             return Response({'error': 'Invalid date format. Use YYYY-MM-DD'}, status=400)
 
+    # --- AGGREGATE QUERY ---
     def handle_aggregate_query(self, user_id, camera_id, start_date, end_date):
-        """Get aggregated stats"""
         try:
-            queryset = InOutCount.objects.filter(user_id=user_id)
-            
+            queryset = InOutStats.objects.filter(user_id=user_id)
+
             if camera_id:
-                # Validate camera exists
-                try:
-                    Camera.objects.get(id=camera_id)
-                except Camera.DoesNotExist:
-                    return Response({'error': 'Invalid camera_id'}, status=404)
                 queryset = queryset.filter(camera_id=camera_id)
-                
+
             if start_date:
                 start_date = datetime.strptime(start_date, "%Y-%m-%d").date()
                 queryset = queryset.filter(date__gte=start_date)
+
             if end_date:
                 end_date = datetime.strptime(end_date, "%Y-%m-%d").date()
                 queryset = queryset.filter(date__lte=end_date)
-                
+
             aggregated = queryset.aggregate(
-                total_in=Sum('in_count'),
-                total_out=Sum('out_count'),
-                total_overall=Sum('total_count')
+                total_in=Sum('total_in'),
+                total_out=Sum('total_out')
             )
-            
+
             return Response({
                 'type': 'aggregate_result',
                 'data': {
                     'total_in': aggregated['total_in'] or 0,
                     'total_out': aggregated['total_out'] or 0,
-                    'total_overall': aggregated['total_overall'] or 0,
+                    'total_overall': (aggregated['total_in'] or 0) + (aggregated['total_out'] or 0),
                     'date_range': {
                         'start': start_date.isoformat() if start_date else None,
                         'end': end_date.isoformat() if end_date else None
@@ -656,8 +596,10 @@ class InOutStatsAPIView(APIView):
                     'user_id': int(user_id)
                 }
             })
+
         except ValueError:
             return Response({'error': 'Invalid date format. Use YYYY-MM-DD'}, status=400)
+
 
 
 class CameraDeleteAPIView(APIView):

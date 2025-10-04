@@ -96,22 +96,10 @@ def run_startup():
 def run_periodic_tasks():
     """Run periodic tasks in background threads (no Celery)."""
     from camera.tasks import (
-        save_in_out_stats_to_file,
-        load_in_out_stats_from_file,
         generate_daily_in_out_reports,
     )
 
     tz = ZoneInfo("Asia/Kolkata")
-    load_in_out_stats_from_file()
-
-    def save_worker():
-        while True:
-            try:
-                save_in_out_stats_to_file()
-                logger.info("💾 Stats saved")
-            except Exception as e:
-                logger.error(f"❌ Error in save_worker: {e}")
-            time.sleep(5)
 
     def email_worker(trigger_hour=20, trigger_minute=00):
         sent_this_minute = False
@@ -129,7 +117,6 @@ def run_periodic_tasks():
                 logger.error(f"❌ Error in email_worker: {e}")
             time.sleep(30)
 
-    threading.Thread(target=save_worker, daemon=True).start()
     threading.Thread(target=email_worker, daemon=True).start()
 
 # --------------------------

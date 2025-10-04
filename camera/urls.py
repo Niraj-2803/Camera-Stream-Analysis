@@ -1,7 +1,6 @@
 from django.urls import path
 from .views import *
 from django.conf.urls.static import static
-# from . import consumers
 
 urlpatterns = [
     path('', CameraListCreateView.as_view(), name='camera-list-create'),

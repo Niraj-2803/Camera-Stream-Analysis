@@ -387,7 +387,8 @@ def create_daily_report_pdf(user_name, date, total_in, total_out, camera_details
 # -------------------------------
 # Email Sender
 # -------------------------------
-from camera.models import Camera, InOutCount, User  # adjust path to your models
+
+from camera.models import Camera, InOutStats, User
 
 def send_daily_report_email(user):
     """
@@ -398,22 +399,22 @@ def send_daily_report_email(user):
     tz = ZoneInfo("Asia/Kolkata")
     today = datetime.now(tz).date()
 
-    # Fetch cameras for this user
+    # Fetch user and active cameras
     user_instance = User.objects.get(email=user)
     cameras = Camera.objects.filter(created_by=user_instance, is_active=True)
 
-    print(f"🔎 User {user} has {cameras} cameras")
+    print(f"🔎 User {user} has {cameras.count()} active cameras")
 
     total_in, total_out = 0, 0
     camera_details = []
 
     for cam in cameras:
-        counts = InOutCount.objects.filter(camera=cam, date=today)
+        stats = InOutStats.objects.filter(user=user_instance, camera=cam, date=today)
 
-        print(f"🔎 Camera {cam.name} has {counts.count()} records for {today}")
+        print(f"🔎 Camera {cam.name} has {stats.count()} records for {today}")
 
-        cam_in = sum(c.in_count for c in counts)
-        cam_out = sum(c.out_count for c in counts)
+        cam_in = sum(s.total_in for s in stats)
+        cam_out = sum(s.total_out for s in stats)
 
         total_in += cam_in
         total_out += cam_out
@@ -424,10 +425,9 @@ def send_daily_report_email(user):
             "out": cam_out
         })
 
-
-    # ✅ Generate PDF (with overall + per-camera stats)
+    # ✅ Generate PDF report
     pdf_file = create_daily_report_pdf(
-        user_name=user, 
+        user_name=user,
         date=today,
         total_in=total_in,
         total_out=total_out,
@@ -446,7 +446,7 @@ Camex Platform Team
 """
 
     from_email = settings.DEFAULT_FROM_EMAIL
-    to_email = [user]   # send to the actual user’s email
+    to_email = [user]
 
     email = EmailMessage(subject, body, from_email, to_email)
 
@@ -458,114 +458,6 @@ Camex Platform Team
 
     email.send()
     print("✅ Daily report email sent successfully")
-
-
-# -------------------------------
-# In/Out Stats Store
-# -------------------------------
-in_out_store = defaultdict(lambda: {"in": 0, "out": 0})
-in_out_lock = threading.Lock()
-
-def update_in_out_stats(user_id, camera_id, counter):
-    now = datetime.now(ZoneInfo("Asia/Riyadh"))
-    key = (user_id, camera_id)
-
-    logger.info(f"🔎 update_in_out_stats called → IN={counter.in_count}, OUT={counter.out_count}")
-
-    with in_out_lock:
-        in_out_store[key]["in"] = counter.in_count
-        in_out_store[key]["out"] = counter.out_count
-
-        snapshot = {
-            "saudi_time": now.isoformat(),
-            "in": counter.in_count,
-            "out": counter.out_count,
-        }
-    return snapshot
-
-def save_in_out_stats_to_file():
-    now = datetime.now(ZoneInfo("Asia/Riyadh"))
-    today = now.date()
-    base_dir = os.path.join(settings.MEDIA_ROOT, "in_out_stats")
-    os.makedirs(base_dir, exist_ok=True)
-
-    try:
-        active_models = UserAiModel.objects.filter(
-            aimodel__function_name="in_out_count_people",
-            is_active=True
-        ).select_related("user", "camera")
-    except Exception as e:
-        logger.error(f"❌ Failed to fetch InOut UserAiModels: {e}")
-        return
-
-    with in_out_lock:
-        for model in active_models:
-            user_id = model.user.id
-            camera_id = model.camera.id
-            key = (user_id, camera_id)
-
-            stats = in_out_store.get(key, {"in": 0, "out": 0})
-            logger.info(f"📂 Saving stats for user={user_id}, camera={camera_id} → {stats}")
-
-            file_name = f"inout_user{user_id}_cam{camera_id}_{today}.json"
-            path = os.path.join(base_dir, file_name)
-
-            snapshot = {
-                "saudi_time": now.isoformat(),
-                "timestamp": time.time(),
-                "stats": stats,
-            }
-
-            data = []
-            if os.path.exists(path):
-                try:
-                    with open(path, "r") as f:
-                        data = json.load(f)
-                except Exception:
-                    logger.warning(f"⚠️ Failed to read existing file {path}")
-
-            data.append(snapshot)
-            try:
-                atomic_write_json(path, data)
-                logger.info(f"✅ Wrote snapshot to {path}")
-            except Exception as e:
-                logger.error(f"❌ Atomic write failed for {file_name}: {e}")
-
-
-
-def load_in_out_stats_from_file():
-    base_dir = os.path.join(settings.MEDIA_ROOT, "in_out_stats")
-    os.makedirs(base_dir, exist_ok=True)
-
-    today = datetime.now(ZoneInfo("Asia/Riyadh")).date()
-    try:
-        active_models = UserAiModel.objects.filter(
-            aimodel__function_name="in_out_count_people",
-            is_active=True
-        ).select_related("user", "camera")
-    except Exception as e:
-        logger.error(f"❌ Failed to fetch InOut UserAiModels: {e}")
-        return
-
-    with in_out_lock:
-        for model in active_models:
-            user_id = model.user.id
-            camera_id = model.camera.id
-            key = (user_id, camera_id)
-
-            file_name = f"inout_user{user_id}_cam{camera_id}_{today}.json"
-            path = os.path.join(base_dir, file_name)
-
-            if os.path.exists(path):
-                try:
-                    with open(path, "r") as f:
-                        data = json.load(f)
-                        if data and isinstance(data, list):
-                            last_snapshot = data[-1]["stats"]
-                            in_out_store[key]["in"] = last_snapshot.get("in", 0)
-                            in_out_store[key]["out"] = last_snapshot.get("out", 0)
-                except Exception as e:
-                    logger.error(f"❌ Failed to load {file_name}: {e}")
 
 
 # -------------------------------
