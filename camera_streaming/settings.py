@@ -37,9 +37,9 @@ EMAIL_HOST = "smtp.gmail.com"
 EMAIL_PORT = 587
 EMAIL_USE_TLS = True
 EMAIL_HOST_USER = "dezzex2@gmail.com"
-EMAIL_HOST_PASSWORD = "wweiqddktdphxpas"
+EMAIL_HOST_PASSWORD = "nmujemrmcmyfkepk"
 DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
-TO_EMAIL = "ineedanit@gmail.com"
+TO_EMAIL = "nirajtupsundar28@gmail.com"
 
 # Application definition
 

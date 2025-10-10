@@ -8,7 +8,6 @@ logger = logging.getLogger(__name__)
 
 # Cache for ObjectCounters
 zone_counters = defaultdict(dict)
-zone_previous_counts = {}  # Track previous counts
 
 # Defaults
 REGION = [(710, 216), (710, 204), (788, 298), (786, 307)]
@@ -21,7 +20,6 @@ def in_out_count_people(frame, counter, user_id=None, camera_id=None):
     Ensures counts persist across reconnections and only reset at new day.
     """
     # Process frame using the counter
-    results = counter.process(frame)
 
     if user_id is None or camera_id is None:
         logger.warning("⚠️ [in_out_count_people] user_id or camera_id missing, cannot persist counts")
@@ -45,6 +43,8 @@ def in_out_count_people(frame, counter, user_id=None, camera_id=None):
             # Created = True → New day, start fresh
             counter.in_count = 0
             counter.out_count = 0
+
+        results = counter.process(frame)
 
         # Update DB with latest counter values
         stats_obj.total_in = counter.in_count
@@ -121,7 +121,6 @@ def execute_user_ai_models(user_id, camera_id, frame, rtsp_url=None, save_to_db=
                         show_out=False,
                         verbose=False,
                     )
-                    zone_previous_counts[zone_key] = {'in': 0, 'out': 0}
                     logger.info(f"Initialized ObjectCounter for zone {zone_key}")
 
                 counter = zone_counters[zone_key]

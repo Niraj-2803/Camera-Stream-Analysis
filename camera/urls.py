@@ -13,6 +13,7 @@ urlpatterns = [
     path('user-aimodels/', UserAiModelView.as_view(), name='user-aimodels'),
     path('user-aimodels/zones/', UserAiModelZoneView.as_view(), name='user-aimodels-zones'),
     path('api/expiry/', ExpiryConfigView.as_view(), name="expiry"),
+    path('api/dashboard/', DashboardView.as_view(), name='dashboard'),
 
     path("api/camera/start-stream/", StartStreamView.as_view(), name="start-stream"),
 

@@ -685,3 +685,65 @@ class CameraDeleteAPIView(APIView):
             return Response({
                 'error': f'Failed to delete camera: {str(e)}'
             }, status=500)
+
+
+class DashboardView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_summary="Get user dashboard stats",
+        operation_description=(
+            "Returns the number of active cameras and unique AI models used by the specified user. "
+            "You must provide a valid userId as a query parameter."
+        ),
+        manual_parameters=[
+            openapi.Parameter(
+                'userId',
+                openapi.IN_QUERY,
+                description="ID of the user whose dashboard stats you want to fetch",
+                type=openapi.TYPE_INTEGER,
+                required=True
+            ),
+        ],
+        responses={
+            200: openapi.Response(
+                description="Dashboard stats",
+                examples={
+                    "application/json": {
+                        "active_cameras_count": 5,
+                        "unique_ai_models_count": 3
+                    }
+                },
+            ),
+            400: "Bad Request (invalid or missing userId)",
+            401: "Unauthorized",
+            404: "User not found"
+        }
+    )
+    def get(self, request):
+        user_id = request.query_params.get("userId")
+
+        if not user_id:
+            return Response({"error": "userId parameter is required"}, status=400)
+
+        try:
+            user = User.objects.get(id=user_id)
+        except User.DoesNotExist:
+            return Response({"error": "User not found"}, status=404)
+
+        # Count active cameras
+        active_cameras_count = Camera.objects.filter(
+            created_by=user, is_active=True, is_deleted=False
+        ).count()
+
+        # Count unique AI models linked to user via UserAiModel
+        unique_ai_models_count = UserAiModel.objects.filter(
+            user=user, is_active=True, is_deleted=False
+        ).values('aimodel').distinct().count()
+
+        data = {
+            "active_cameras_count": active_cameras_count,
+            "unique_ai_models_count": unique_ai_models_count
+        }
+
+        return Response(data)

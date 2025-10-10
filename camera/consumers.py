@@ -1,13 +1,8 @@
 import logging
-import threading
 import time
 import json
 import cv2
-from pathlib import Path
-from datetime import datetime
 from channels.generic.websocket import WebsocketConsumer
-from django.conf import settings
-from urllib.parse import parse_qs
 from django.utils import timezone
 from .models import Camera, InOutStats
 from threading import Thread
