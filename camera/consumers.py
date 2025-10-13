@@ -6,6 +6,7 @@ from channels.generic.websocket import WebsocketConsumer
 from django.utils import timezone
 from .models import Camera, InOutStats
 from threading import Thread
+from datetime import datetime
 from camera.aimodels.helper import *
 from queue import Queue, Full, Empty
 
@@ -81,6 +82,9 @@ class AiWorkerConsumer(WebsocketConsumer):
         cap.release()
 
     def _ai_worker_loop(self):
+        last_total_in = None
+        last_total_out = None
+
         while self.streaming:
             try:
                 frame = self.ai_queue.get(timeout=0.5)
@@ -88,7 +92,7 @@ class AiWorkerConsumer(WebsocketConsumer):
                 continue
 
             try:
-                # Run all active AI models for this user/camera
+                #  Run all active AI models
                 execute_user_ai_models(
                     user_id=self.user_id,
                     camera_id=self.camera_id,
@@ -97,7 +101,7 @@ class AiWorkerConsumer(WebsocketConsumer):
                     save_to_db=False
                 )
 
-                # Fetch the latest snapshot directly from DB
+                # Fetch the latest snapshot
                 today = timezone.now().date()
                 stats_obj = InOutStats.objects.filter(
                     user_id=self.user_id,
@@ -105,14 +109,21 @@ class AiWorkerConsumer(WebsocketConsumer):
                     date=today
                 ).first()
 
-                snapshot = {
-                    "date": str(today),
-                    "total_in": stats_obj.total_in if stats_obj else 0,
-                    "total_out": stats_obj.total_out if stats_obj else 0
-                }
+                total_in = stats_obj.total_in if stats_obj else 0
+                total_out = stats_obj.total_out if stats_obj else 0
 
-                # Send snapshot to frontend
-                self.send(text_data=json.dumps(snapshot))
+                # ✅ Only send if counts changed
+                if total_in != last_total_in or total_out != last_total_out:
+                    snapshot = {
+                        "date": str(today),
+                        "total_in": total_in,
+                        "total_out": total_out
+                    }
+                    self.send(text_data=json.dumps(snapshot))
+
+                    # Update last values
+                    last_total_in = total_in
+                    last_total_out = total_out
 
             except Exception as e:
                 print(f"⚠️ AI worker error: {e}")
