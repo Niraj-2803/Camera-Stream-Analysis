@@ -4,9 +4,8 @@ import json
 import cv2
 from channels.generic.websocket import WebsocketConsumer
 from django.utils import timezone
-from .models import Camera, InOutStats
+from .models import Camera, InOutStats, SeatStatusStats
 from threading import Thread
-from datetime import datetime
 from camera.aimodels.helper import *
 from queue import Queue, Full, Empty
 
@@ -82,8 +81,7 @@ class AiWorkerConsumer(WebsocketConsumer):
         cap.release()
 
     def _ai_worker_loop(self):
-        last_total_in = None
-        last_total_out = None
+        last_snapshot = None
 
         while self.streaming:
             try:
@@ -92,38 +90,88 @@ class AiWorkerConsumer(WebsocketConsumer):
                 continue
 
             try:
-                #  Run all active AI models
+                # Run active models
                 execute_user_ai_models(
                     user_id=self.user_id,
                     camera_id=self.camera_id,
                     frame=frame,
                     rtsp_url=None,
-                    save_to_db=False
+                    save_to_db=True  # store results
                 )
 
-                # Fetch the latest snapshot
                 today = timezone.now().date()
+
+                # --- InOut ---
                 stats_obj = InOutStats.objects.filter(
                     user_id=self.user_id,
                     camera_id=self.camera_id,
                     date=today
                 ).first()
 
-                total_in = stats_obj.total_in if stats_obj else 0
-                total_out = stats_obj.total_out if stats_obj else 0
+                in_out_data = {
+                    "total_in": stats_obj.total_in if stats_obj else 0,
+                    "total_out": stats_obj.total_out if stats_obj else 0
+                }
 
-                # ✅ Only send if counts changed
-                if total_in != last_total_in or total_out != last_total_out:
-                    snapshot = {
-                        "date": str(today),
-                        "total_in": total_in,
-                        "total_out": total_out
+                # --- Seat Status ---
+                seat_objs = SeatStatusStats.objects.filter(
+                    user_id=self.user_id,
+                    camera_id=self.camera_id,
+                    date=today
+                )
+
+                seat_data = []
+                total_dwell_time = 0.0
+                total_productivity = 0.0
+                total_alerts = 0
+
+                for s in seat_objs:
+                    total_working_hours = s.dwell_time_total + s.empty_total
+                    productivity = round((s.dwell_time_total / total_working_hours) * 100, 1) if total_working_hours > 0 else 0
+                    alert = "Long away time" if s.empty >= 600 else None
+                    if alert:
+                        total_alerts += 1
+
+                    total_dwell_time += float(s.dwell_time_total)
+                    total_productivity += productivity
+
+                    seat_data.append({
+                        "seat_name": s.seat_name,
+                        "occupied": s.is_occupied,
+                        "dwell_time": float(s.dwell_time),
+                        "dwell_time_total": float(s.dwell_time_total),
+                        "empty": float(s.empty),
+                        "empty_total": float(s.empty_total),
+                        "productivity": productivity,
+                        "alert": alert,
+                        "has_alert": alert is not None
+                    })
+
+                # --- Compute summary ---
+                total_persons = len(seat_objs)
+                avg_productivity = round(total_productivity / total_persons, 1) if total_persons > 0 else 0
+                total_productive_hours = total_dwell_time
+
+                # --- Common response ---
+                snapshot = {
+                    "type": "ai_snapshot",
+                    "date": str(today),
+                    "in_out": in_out_data,
+                    "seat_status": seat_data,
+                    "summary": {
+                        "total_persons": total_persons,
+                        "total_productive_hours": total_productive_hours,
+                        "avg_productivity": avg_productivity,
+                        "total_alerts": total_alerts
                     }
-                    self.send(text_data=json.dumps(snapshot))
+                }
 
-                    # Update last values
-                    last_total_in = total_in
-                    last_total_out = total_out
+
+                # Only send if new
+                if snapshot != last_snapshot:
+                    self.send(text_data=json.dumps(snapshot))
+                    last_snapshot = snapshot
 
             except Exception as e:
                 print(f"⚠️ AI worker error: {e}")
+

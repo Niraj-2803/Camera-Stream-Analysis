@@ -109,3 +109,25 @@ class RestrictedZoneAlert(models.Model):
 
     def __str__(self):
         return f"Alert - {self.zone_name} ({self.date})"
+
+
+class SeatStatusStats(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    camera = models.ForeignKey(Camera, on_delete=models.CASCADE)
+    seat_name = models.CharField(max_length=100)
+    date = models.DateField(default=timezone.now)
+    is_occupied = models.BooleanField(default=False)
+    posture = models.CharField(max_length=10, null=True, blank=True)  # sitting/standing
+    dwell_time = models.FloatField(default=0.0)
+    dwell_time_total = models.FloatField(default=0.0)
+    empty = models.FloatField(default=0.0)
+    empty_total = models.FloatField(default=0.0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "ai_seatstatusstats"
+        unique_together = ("user", "camera", "seat_name", "date")
+
+    def __str__(self):
+        return f"{self.camera.name} - {self.seat_name} ({self.date})"
